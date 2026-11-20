@@ -116,7 +116,8 @@ export type VoxelLayerProps = LayerProps & {
   maxSteps?: number;
 
   /**
-   * Distance over which one alpha value from transferFunction applies, in layer units.
+   * Distance over which one alpha value from transferFunction applies, in layer units
+   * after modelMatrix. Model scaling changes absorption; map projection and camera zoom do not.
    * If alpha is 0.5 over 2 meters, each 2-meter segment lets half the light through.
    * A 4-meter segment lets a quarter through. Defaults to the smallest cell size.
    */

@@ -113,6 +113,8 @@ async function render(options = {}) {
       clipBounds: options.clip ?? [0, 0, 0, 1, 1, 1],
       sampling: options.sampling ?? 'linear',
       density: options.density ?? 1,
+      opacityUnitDistance: options.opacityUnitDistance,
+      modelMatrix: options.modelMatrix,
       coordinateSystem: options.map ? 'meter-offsets' : 'cartesian',
       coordinateOrigin: options.map ? [-122.4, 37.78, 0] : [0, 0, 0],
       depthSource: options.depth === false ? undefined : depth,
@@ -124,14 +126,20 @@ async function render(options = {}) {
     deck.setProps({
       controller: false,
       views: options.map
-        ? new MapView()
+        ? new MapView({ farZMultiplier: options.farZMultiplier ?? 1.01 })
         : new OrbitView({
             far: options.orthographic === false ? 1000 : 1.5,
             orbitAxis: 'Z',
             orthographic: options.orthographic ?? true,
           }),
       viewState: options.map
-        ? { longitude: -122.4, latitude: 37.78, zoom: 18, pitch: 35, bearing: 0 }
+        ? (options.viewState ?? {
+            longitude: -122.4,
+            latitude: 37.78,
+            zoom: 18,
+            pitch: 35,
+            bearing: 0,
+          })
         : (options.viewState ?? {
             target: [0, 0, 0],
             rotationX: 0,
@@ -179,6 +187,86 @@ try {
   assert.ok(
     Math.abs(full[0] - bounded[0]) <= 2,
     'maximum iterations coarsens sampling without truncating the ray',
+  );
+
+  const topDown = {
+    map: true,
+    // Include the stretched grid below ground instead of clipping it at the map far plane.
+    farZMultiplier: 4,
+    viewState: { longitude: -122.4, latitude: 37.78, zoom: 18, pitch: 0, bearing: 0 },
+  };
+  const originalThickness = pixel(await render(topDown));
+  const stretchedThickness = pixel(
+    await render({
+      ...topDown,
+      modelMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1],
+    }),
+  );
+  const expectedStretched = 255 * (1 - (1 - 16 / 255) ** 32);
+  assert.ok(
+    Math.abs(stretchedThickness[0] - expectedStretched) <= 3,
+    `four times the transformed thickness must accumulate four times the optical depth: ${stretchedThickness}`,
+  );
+  assert.ok(stretchedThickness[0] > originalThickness[0] + 90);
+  const stretchedCoarse = pixel(
+    await render({
+      ...topDown,
+      step: 2,
+      maxSteps: 2,
+      modelMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1],
+    }),
+  );
+  assert.ok(Math.abs(stretchedThickness[0] - stretchedCoarse[0]) <= 2);
+  const reflectedThickness = pixel(
+    await render({
+      ...topDown,
+      modelMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -4, 0, 0, 0, 0, 1],
+    }),
+  );
+  assert.ok(Math.abs(stretchedThickness[0] - reflectedThickness[0]) <= 2);
+
+  const rigidTransform = pixel(
+    await render({
+      ...topDown,
+      modelMatrix: [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 5, 1],
+    }),
+  );
+  assert.ok(
+    Math.abs(originalThickness[0] - rigidTransform[0]) <= 2,
+    'translation and rigid rotation must not change absorption',
+  );
+  const rescaledReference = pixel(
+    await render({
+      ...topDown,
+      opacityUnitDistance: 8,
+      modelMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1],
+    }),
+  );
+  assert.ok(
+    Math.abs(originalThickness[0] - rescaledReference[0]) <= 2,
+    'scaling thickness and reference distance equally must preserve optical depth',
+  );
+
+  const transformedZoom = pixel(
+    await render({
+      ...topDown,
+      viewState: { ...topDown.viewState, zoom: 18.5 },
+      modelMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1],
+    }),
+  );
+  assert.ok(
+    Math.abs(stretchedThickness[0] - transformedZoom[0]) <= 2,
+    'camera zoom must not change the reference opacity distance',
+  );
+  const shearedThickness = pixel(
+    await render({
+      ...topDown,
+      modelMatrix: [1, 0, 0, 0, 0, 1, 0, 0, 0.5, 0, 4, 0, 0, 0, 0, 1],
+    }),
+  );
+  assert.ok(
+    Math.abs(stretchedThickness[0] - shearedThickness[0]) <= 2,
+    'sheared models must measure distance along the transformed ray',
   );
 
   const heightColors = await render({ gradient: true, colorBy: 'z' });
