@@ -21,6 +21,7 @@ const OFFSETS = {
   renderMode: 44,
   volumeToView: 48,
   normalToView: 64,
+  volumeToOpacity: 80,
 } as const;
 
 /** Codes for coloring by data value (0) or position on X, Y or Z (1 to 3). */
@@ -29,8 +30,8 @@ const COLOR_COORDINATES = { value: 0, x: 1, y: 2, z: 3 } as const;
 /** The numbers the pixel shader uses to select a render mode. */
 const RENDER_MODES = { volume: 0, isosurface: 1 } as const;
 
-/** Buffer size in bytes for three 64-byte matrices and eight 16-byte groups. Includes padding. */
-export const VOXEL_UNIFORM_BYTES = (3 * 16 + 8 * 4) * Float32Array.BYTES_PER_ELEMENT;
+/** Buffer size in bytes for four 64-byte matrices and eight 16-byte groups. Includes padding. */
+export const VOXEL_UNIFORM_BYTES = (4 * 16 + 8 * 4) * Float32Array.BYTES_PER_ELEMENT;
 
 /** Float32 offsets for the fields in OutlineUniforms in WGSL. */
 export const BOUNDS_OFFSETS = {
@@ -111,6 +112,14 @@ export function createVoxelUniforms(
   values.set(volumeToClip.invert(), OFFSETS.clipToVolume);
   values.set(volumeToView, OFFSETS.volumeToView);
   values.set(viewToVolume.transpose(), OFFSETS.normalToView);
+  // Absorption follows the displayed geometry, including nonuniform scale and shear.
+  // Map projection and camera zoom must not change the material's reference distance.
+  values.set(
+    new Matrix4(props.modelMatrix ?? undefined)
+      .setColumn(3, [0, 0, 0, 1])
+      .scale(getExtent(props.volume)),
+    OFFSETS.volumeToOpacity,
+  );
   values.set(
     [
       viewport.x * pixelRatio,

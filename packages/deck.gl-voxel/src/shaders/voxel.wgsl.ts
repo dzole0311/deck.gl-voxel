@@ -29,6 +29,7 @@ struct VoxelUniforms {
   isovalue: f32,
   volumeToView: mat4x4f,
   normalToView: mat4x4f,
+  volumeToOpacity: mat4x4f,
 };
 
 @group(0) @binding(0) var<uniform> voxel: VoxelUniforms;
@@ -383,7 +384,8 @@ fn getMarchStep(direction: vec3f, rayLength: f32) -> f32 {
  * @returns RGBA with RGB already multiplied by the accumulated alpha, before layer opacity.
  */
 fn marchVolume(origin: vec3f, direction: vec3f, start: f32, end: f32, step: f32) -> vec4f {
-  let opacityUnitsPerGridUnit = length(direction * voxel.extent) / voxel.opacityUnitDistance;
+  let opacityDirection = (voxel.volumeToOpacity * vec4f(direction, 0.0)).xyz;
+  let opacityUnitsPerGridUnit = length(opacityDirection) / voxel.opacityUnitDistance;
   var accumulated = vec4f(0.0);
   var t = start;
 
