@@ -124,7 +124,7 @@ output {
   color: #777;
 }
 
-.controls input[type="range"] {
+.controls input[type='range'] {
   flex: 1;
   min-width: 0;
   margin: 0;
@@ -182,7 +182,7 @@ output {
   border-radius: 50%;
 }
 
-.controls[data-state="ready"] .spinner {
+.controls[data-state='ready'] .spinner {
   display: none;
 }
 

@@ -1,6 +1,6 @@
 packages:
-  - "packages/*"
-  - "examples/*"
+  - 'packages/*'
+  - 'examples/*'
 supportedArchitectures:
   cpu:
     - current
