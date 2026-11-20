@@ -9,17 +9,7 @@
     "includes": ["**", "!**/dist", "!**/node_modules", "!**/coverage", "!**/pnpm-lock.yaml"]
   },
   "formatter": {
-    "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 2,
-    "lineWidth": 100
-  },
-  "javascript": {
-    "formatter": {
-      "quoteStyle": "single",
-      "semicolons": "always",
-      "trailingCommas": "all"
-    }
+    "enabled": false
   },
   "linter": {
     "enabled": true,
