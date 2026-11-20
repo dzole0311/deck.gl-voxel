@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" href="data:,">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
     <title>Hurricane volumes · deck.gl-voxel</title>
   </head>
   <body>
@@ -30,8 +30,18 @@
         </div>
         <div id="isovalue-control" class="range-control" hidden>
           <label for="isovalue">Isovalue</label>
-          <input id="isovalue" type="range" min="0" max="1" step="0.01" value="0.5" aria-valuetext="50%">
-          <output id="isovalue-value" class="range-readout" for="isovalue" aria-live="off">50%</output>
+          <input
+            id="isovalue"
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value="0.5"
+            aria-valuetext="50%"
+          />
+          <output id="isovalue-value" class="range-readout" for="isovalue" aria-live="off"
+            >50%</output
+          >
         </div>
         <div class="time-label">
           <label for="hour">Time</label>
@@ -39,7 +49,7 @@
         </div>
         <div class="time-controls">
           <button id="play" type="button" disabled>Play</button>
-          <input id="hour" type="range" min="0" max="71" step="1" value="36" disabled>
+          <input id="hour" type="range" min="0" max="71" step="1" value="36" disabled />
           <div class="playback-speed">
             <label for="speed">Speed</label>
             <select id="speed">
@@ -51,21 +61,47 @@
         </div>
         <div class="range-control">
           <label for="density">Density</label>
-          <input id="density" type="range" min="0" max="4" step="0.1" value="1" aria-valuetext="1.0×">
-          <output id="density-value" class="range-readout" for="density" aria-live="off">1.0×</output>
+          <input
+            id="density"
+            type="range"
+            min="0"
+            max="4"
+            step="0.1"
+            value="1"
+            aria-valuetext="1.0×"
+          />
+          <output id="density-value" class="range-readout" for="density" aria-live="off"
+            >1.0×</output
+          >
         </div>
         <div class="range-control">
           <label for="exaggeration">Exaggeration</label>
-          <input id="exaggeration" type="range" min="1" max="100" step="1" value="50" aria-valuetext="50×">
-          <output id="exaggeration-value" class="range-readout" for="exaggeration" aria-live="off">50×</output>
+          <input
+            id="exaggeration"
+            type="range"
+            min="1"
+            max="100"
+            step="1"
+            value="50"
+            aria-valuetext="50×"
+          />
+          <output id="exaggeration-value" class="range-readout" for="exaggeration" aria-live="off"
+            >50×</output
+          >
         </div>
         <div class="status-row">
           <span class="spinner" aria-hidden="true"></span>
           <span id="status" role="status">Loading…</span>
         </div>
         <p class="credit">
-          <span id="credit">Contains modified Copernicus Climate Change Service information (2024).</span>
-          <a id="source" href="https://helene-voxel-329134478190-eu-central-1.s3.eu-central-1.amazonaws.com/era5-helene.zarr/fraction_of_cloud_cover/zarr.json">Dataset source</a>
+          <span id="credit"
+            >Contains modified Copernicus Climate Change Service information (2024).</span
+          >
+          <a
+            id="source"
+            href="https://helene-voxel-329134478190-eu-central-1.s3.eu-central-1.amazonaws.com/era5-helene.zarr/fraction_of_cloud_cover/zarr.json"
+            >Dataset source</a
+          >
         </p>
       </section>
     </main>
