@@ -1,4 +1,3 @@
-import { Badge } from '@deck.gl-voxel/example-ui/components/badge';
 import { Button } from '@deck.gl-voxel/example-ui/components/button';
 import {
   Card,
@@ -20,6 +19,7 @@ import { Spinner } from '@deck.gl-voxel/example-ui/components/spinner';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { type DatasetId, datasets } from './datasets.js';
+import { HoverTooltip } from './hover-tooltip.js';
 import { ExampleViewer, type HoverSample } from './viewer.js';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '@deck.gl-voxel/example-ui/styles.css';
@@ -30,16 +30,20 @@ const ChunkInspector = lazy(() =>
     default: module.ChunkInspector,
   })),
 );
+const HOUR_MS = 3_600_000;
+const PLAYBACK_DELAY_MS = 700;
+
+function isDatasetId(value: string | null): value is DatasetId {
+  return value === 'helene' || value === 'milton' || (import.meta.env.DEV && value === 'chunks');
+}
+
 const params = new URLSearchParams(location.search);
 const requested = params.get('dataset');
-const initialId: DatasetId =
-  requested === 'milton' ||
-  requested === 'helene' ||
-  (import.meta.env.DEV && requested === 'chunks')
-    ? requested
-    : import.meta.env.DEV && params.get('debug') === '1'
-      ? 'chunks'
-      : 'helene';
+const initialId: DatasetId = isDatasetId(requested)
+  ? requested
+  : import.meta.env.DEV && params.get('debug') === '1'
+    ? 'chunks'
+    : 'helene';
 const initial = datasets[initialId];
 const hourFormat = new Intl.DateTimeFormat('en', {
   timeZone: 'UTC',
@@ -153,7 +157,7 @@ function App() {
     const timer = setTimeout(() => {
       setLoading(true);
       setFrameIndex((frameIndex + 1) % frameCount);
-    }, 700 / speed);
+    }, PLAYBACK_DELAY_MS / speed);
     return () => clearTimeout(timer);
   }, [playing, loading, frameCount, speed, frameIndex]);
   function selectDataset(id: DatasetId): void {
@@ -180,6 +184,7 @@ function App() {
   }
   function reload(): void {
     setPlaying(false);
+    setReady(false);
     setLoading(true);
     setError(undefined);
     setRevision((value) => value + 1);
@@ -189,7 +194,7 @@ function App() {
     requestAnimationFrame(() => document.getElementById('show-inspector')?.focus());
   }
   const shownFrame = draftFrame ?? frameIndex;
-  const time = hourFormat.format(dataset.firstTime + shownFrame * dataset.stepHours * 3_600_000);
+  const time = hourFormat.format(dataset.firstTime + shownFrame * dataset.stepHours * HOUR_MS);
   const sourceKey = `${datasetId}-${revision}`;
   return (
     <main>
@@ -216,11 +221,7 @@ function App() {
               value={datasetId}
               onChange={(event) => {
                 const id = event.target.value;
-                if (
-                  id === 'helene' ||
-                  id === 'milton' ||
-                  (import.meta.env.DEV && id === 'chunks')
-                ) {
+                if (isDatasetId(id)) {
                   selectDataset(id);
                 }
               }}
@@ -257,6 +258,7 @@ function App() {
               <Slider
                 id="isovalue"
                 aria-label="Isovalue"
+                aria-valuetext={dataset.formatValue(isovalue)}
                 value={[isovalue]}
                 min={dataset.valueRange[0]}
                 max={dataset.valueRange[1]}
@@ -349,6 +351,7 @@ function App() {
             <Slider
               id="density"
               aria-label="Density"
+              aria-valuetext={`${density.toFixed(1)}×`}
               min={0}
               max={4}
               step={0.1}
@@ -372,6 +375,7 @@ function App() {
             <Slider
               id="exaggeration"
               aria-label="Exaggeration"
+              aria-valuetext={`${exaggeration}×`}
               min={1}
               max={100}
               step={1}
@@ -399,7 +403,7 @@ function App() {
             className={`flex min-h-4 items-center gap-2 text-xs ${error ? 'text-destructive' : 'text-muted-foreground'}`}
           >
             {loading ? <Spinner aria-hidden="true" /> : null}
-            {error?.message ?? (loading ? 'Loading…' : '')}
+            {error?.message ?? (loading ? (ready ? 'Buffering…' : 'Loading…') : '')}
           </p>
         </CardContent>
         <CardFooter className="block space-y-1 px-4 text-xs text-muted-foreground">
@@ -414,9 +418,10 @@ function App() {
       {inspector && view ? (
         <Suspense
           fallback={
-            <Badge className="fixed top-4 right-4 z-30" variant="secondary">
-              Loading inspector…
-            </Badge>
+            <Spinner
+              className="fixed top-4 right-4 z-30 text-muted-foreground"
+              aria-label="Loading inspector"
+            />
           }
         >
           <ChunkInspector
@@ -454,27 +459,14 @@ function App() {
           N
         </Button>
       </div>
-      {hover ? (
-        <Card
-          id="tooltip"
-          role="tooltip"
-          className="pointer-events-none fixed z-40 max-w-64 gap-0 px-3 py-2 text-xs"
-          style={{
-            left: Math.max(8, Math.min(hover.x + 12, window.innerWidth - 272)),
-            top: Math.max(8, Math.min(hover.y + 12, window.innerHeight - 70)),
-          }}
-        >
-          {hover.text}
-        </Card>
-      ) : null}
+      {hover ? <HoverTooltip sample={hover} /> : null}
     </main>
   );
 }
 
-const element = document.getElementById('root');
-if (!element) {
-  throw new Error('Missing example root');
-}
+const element =
+  document.getElementById('root') ?? document.body.appendChild(document.createElement('div'));
+element.id = 'root';
 const root = createRoot(element);
 root.render(<App />);
 const pagehide = (event: PageTransitionEvent): void => {

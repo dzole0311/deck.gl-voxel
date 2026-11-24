@@ -9,6 +9,9 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
+  'aria-valuetext': ariaValueText,
   ...props
 }: React.ComponentProps<typeof SliderPrimitive.Root>) {
   const _values = React.useMemo(
@@ -45,9 +48,9 @@ function Slider({
       {Array.from({ length: _values.length }, (_, index) => (
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
-          aria-label={props['aria-label']}
-          aria-labelledby={props['aria-labelledby']}
-          aria-valuetext={props['aria-valuetext']}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          aria-valuetext={ariaValueText}
           key={
             // biome-ignore lint/suspicious/noArrayIndexKey: A thumb is identified by its position, not its changing value.
             index
