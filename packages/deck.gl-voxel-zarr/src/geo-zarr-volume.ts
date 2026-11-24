@@ -86,10 +86,11 @@ export function hasGeoZarrMetadata(attrs: Attributes): boolean {
 }
 
 /**
- * Opens the chosen GeoZarr array and works out which dimension is X, Y, Z or time.
+ * Opens the chosen GeoZarr array and maps named dimensions to X, Y, Z and time.
+ * Additional dimensions require fixed indices in {@link ZarrVolumeOptions.selection}.
  * @param node - Selected field group or directly selected array.
  * @param attrs - Map metadata collected for the field.
- * @param options - Resolution level, vertical coordinates and cancellation signal.
+ * @param options - Resolution level, vertical coordinates, fixed dimension selections and cancellation.
  * @returns The array, its axes and a function to prepare the map grid once the depth is known.
  * @throws {Error} If the required metadata or axis layout is unsupported.
  */
@@ -134,25 +135,43 @@ export async function readGeoZarrField(
       : await open(node.resolve(level.path), { kind: 'array', ...openOptions });
   const xDimension = metadata.axes[metadata.xAxisIndex];
   const yDimension = metadata.axes[metadata.yAxisIndex];
-  const names =
-    array.shape.length === 4
-      ? ['time', verticalDimension, yDimension, xDimension]
-      : [verticalDimension, yDimension, xDimension];
+  const names = array.dimensionNames;
+  const axes: Axis[] = (names ?? []).map((name, dimension) => {
+    if (name === xDimension) {
+      return 'x';
+    }
+    if (name === yDimension) {
+      return 'y';
+    }
+    if (name === verticalDimension) {
+      return 'z';
+    }
+    if (name === 'time') {
+      return 'time';
+    }
+    if (options.selection?.[dimension] !== undefined) {
+      return null;
+    }
+    throw new Error('Extra GeoZarr dimensions require a fixed selection index.');
+  });
 
   if (
     !xDimension ||
     !yDimension ||
+    !names ||
+    names.length !== array.shape.length ||
     new Set(names).size !== names.length ||
-    array.dimensionNames?.length !== names.length ||
-    !array.dimensionNames.every((name, index) => name === names[index])
+    !axes.includes('x') ||
+    !axes.includes('y') ||
+    !axes.includes('z')
   ) {
-    throw new Error('Expected GeoZarr dimensions in [time,] Z, Y, X order.');
+    throw new Error('Expected named GeoZarr X, Y and vertical dimensions.');
   }
 
   return {
     array,
     level,
-    axes: names.length === 4 ? ['time', 'z', 'y', 'x'] : ['z', 'y', 'x'],
+    axes,
     /**
      * Reads heights or depths for the cell centers once the frame fits the size limit.
      * The renderer needs a starting edge and a cell size. For centers at 5 m and 15 m,
