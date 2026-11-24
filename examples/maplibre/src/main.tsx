@@ -59,6 +59,7 @@ function App() {
   const [datasetId, setDatasetId] = useState<DatasetId>(initialId);
   const [frameIndex, setFrameIndex] = useState(initial.initialFrame);
   const [draftFrame, setDraftFrame] = useState<number>();
+  const draggingTime = useRef(false);
   const [frameCount, setFrameCount] = useState(0);
   const [ready, setReady] = useState(false),
     [loading, setLoading] = useState(true);
@@ -285,14 +286,29 @@ function App() {
               max={Math.max(0, frameCount - 1)}
               step={1}
               disabled={!ready}
+              onPointerDownCapture={() => {
+                draggingTime.current = true;
+              }}
+              onPointerUpCapture={() => {
+                draggingTime.current = false;
+              }}
+              onPointerCancel={() => {
+                draggingTime.current = false;
+                setDraftFrame(undefined);
+              }}
               onValueChange={(values) => {
                 const value = values[0];
                 if (value !== undefined) {
                   setPlaying(false);
-                  setDraftFrame(value);
+                  if (draggingTime.current) {
+                    setDraftFrame(value);
+                  } else {
+                    seek(value);
+                  }
                 }
               }}
               onValueCommit={(values) => {
+                draggingTime.current = false;
                 const value = values[0];
                 if (value !== undefined) {
                   seek(value);

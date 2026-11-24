@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5175",
-    "build": "vite build"
+    "build": "vite build",
+    "test:browser": "pnpm -w build && node tests/browser.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "9.3.12",
