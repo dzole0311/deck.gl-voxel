@@ -29,6 +29,13 @@ const errors = [];
 
 page.on('pageerror', (error) => errors.push(error.message));
 page.on('console', (message) => {
+  // Zarrita probes absent v2 metadata while discovering the v3 fixture hierarchy.
+  if (
+    message.location().url.includes('/zarr-layer-fixture/') &&
+    message.text().includes('status of 404')
+  ) {
+    return;
+  }
   if (message.type() === 'error' || message.type() === 'warning') {
     errors.push(message.text());
   }
@@ -448,6 +455,84 @@ try {
     true,
     'data replacement destroys previous GPU resources',
   );
+
+  await page.route('**/zarr-layer-fixture/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/grid/zarr.json')) {
+      await route.fulfill({
+        json: {
+          zarr_format: 3,
+          node_type: 'array',
+          shape: [2, 8, 12, 16],
+          data_type: 'float32',
+          chunk_grid: { name: 'regular', configuration: { chunk_shape: [1, 8, 12, 16] } },
+          chunk_key_encoding: { name: 'default', configuration: { separator: '/' } },
+          codecs: [{ name: 'bytes', configuration: { endian: 'little' } }],
+          fill_value: 0,
+          attributes: {},
+        },
+      });
+    } else if (path.includes('/c/')) {
+      await route.fulfill({ body: Buffer.from(new Float32Array(16 * 12 * 8).fill(0.5).buffer) });
+    } else {
+      await route.fulfill({ status: 404 });
+    }
+  });
+  const direct = pixel(await render());
+  await page.evaluate(() => {
+    const app = window.voxelFixture;
+    const style = app.lastLayer.props;
+    Object.assign(app, { loadedFrames: 0, sourceLoads: 0 });
+    const layer = new app.ZarrVoxelLayer({
+      ...style,
+      id: 'url-volume',
+      loadOptions: { core: { fetch: { headers: { 'X-Fixture': 'voxel' } } } },
+      source: new URL('/zarr-layer-fixture', location.href).href,
+      sourceOptions: {
+        field: 'grid',
+        layout: { axes: ['time', 'z', 'y', 'x'], origin: [-16, -12, -8], spacing: [2, 2, 2] },
+      },
+      onSourceLoad: () => {
+        app.sourceLoads++;
+      },
+      onVolumeLoad: () => {
+        app.loadedFrames++;
+      },
+    });
+    app.deck.setProps({ layers: [layer] });
+  });
+  await page.waitForFunction(() => {
+    const app = window.voxelFixture;
+    return app.loadedFrames === 1 && app.deck.props.layers[0].isLoaded;
+  });
+  const loaded = pixel(PNG.sync.read(await page.screenshot()));
+  assert.ok(
+    loaded.every((value, index) => Math.abs(value - direct[index]) <= 2),
+    'URL-backed layer renders the same frame and style as VoxelLayer',
+  );
+  await page.evaluate(() => {
+    const app = window.voxelFixture;
+    app.deck.setProps({
+      layers: [
+        app.deck.props.layers[0].clone({
+          frameIndex: 1,
+          density: 2,
+          sourceOptions: structuredClone(app.deck.props.layers[0].props.sourceOptions),
+          loadOptions: { core: { fetch: { headers: { 'X-Fixture': 'voxel' } } } },
+        }),
+      ],
+    });
+  });
+  await page.waitForFunction(
+    () =>
+      window.voxelFixture.loadedFrames === 2 && window.voxelFixture.deck.props.layers[0].isLoaded,
+  );
+  assert.equal(
+    await page.evaluate(() => window.voxelFixture.sourceLoads),
+    1,
+    'frame updates reuse opened metadata through deck.gl state transfer',
+  );
+  await page.unroute('**/zarr-layer-fixture/**');
 
   const perspective = pixel(await render({ orthographic: false }));
   assert.ok(perspective[0] > 70, 'perspective camera renders the volume');

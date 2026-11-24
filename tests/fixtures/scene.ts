@@ -2,6 +2,8 @@ import { Deck, MapView, OrbitView } from '@deck.gl/core';
 import { webgpuAdapter } from '@luma.gl/webgpu';
 import { VoxelDepthEffect, VoxelLayer } from 'deck.gl-voxel';
 
+import { ZarrVoxelLayer } from '../../packages/deck.gl-voxel-zarr/src/index.js';
+
 import { createFixture, createLut } from './fixtures.js';
 import { ObstacleLayer } from './obstacle-layer.js';
 
@@ -32,6 +34,7 @@ Object.assign(window, {
     createFixture,
     createLut,
     VoxelLayer,
+    ZarrVoxelLayer,
     OrbitView,
     MapView,
     ObstacleLayer,
