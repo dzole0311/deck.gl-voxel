@@ -175,6 +175,12 @@ async function render(options = {}) {
   }, options);
 
   await page.waitForFunction(() => window.voxelFixture.frames > 0);
+  // A render callback can run before software WebGPU finishes the submitted work.
+  await page.evaluate(async () => {
+    await window.voxelFixture.deck.device.handle.queue.onSubmittedWorkDone();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  assert.deepEqual(await page.evaluate(() => window.voxelFixture.errors), []);
 
   return PNG.sync.read(await page.screenshot());
 }
@@ -597,6 +603,16 @@ try {
   console.log(
     'WebGPU browser checks passed: transfer function, step correction, clipping, missing data, axes, depth, resize, and resource disposal.',
   );
+} catch (error) {
+  console.error('Browser diagnostics:', errors);
+  console.error(
+    'WebGPU diagnostics:',
+    await page.evaluate(() => ({
+      adapter: window.voxelFixture?.deck.device?.info,
+      errors: window.voxelFixture?.errors,
+    })),
+  );
+  throw error;
 } finally {
   await browser.close();
   await server.close();
