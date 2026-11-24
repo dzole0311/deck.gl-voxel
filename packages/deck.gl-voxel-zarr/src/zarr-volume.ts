@@ -1,8 +1,9 @@
-import type { Vector3, VoxelData } from 'deck.gl-voxel';
+import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import { type Chunk, FetchStore, get, open, root, withRangeCoalescing } from 'zarrita';
 
 import { hasGeoZarrMetadata, readGeoZarrField, readSpatialAttributes } from './geo-zarr-volume.js';
 import { createProjectedGrid, projectFrame } from './projected-grid.js';
+import { VolumeView, type ZarrViewOptions } from './volume-view.js';
 
 /** Labels for the stored array's dimensions. */
 export type Axis = 'x' | 'y' | 'z' | 'time' | null;
@@ -77,12 +78,33 @@ export interface ZarrVolumeOptions {
   /** Intercepts every metadata, coordinate, chunk and shard-range request. Preserve the request's Range header and signal. */
   readonly fetch?: (request: Request) => Promise<Response>;
 
+  /**
+   * Retained decoded chunk byte budget; excludes displayed grids and in-flight decoding.
+   * @default 67108864
+   */
+  readonly maxCacheBytes?: number;
+
+  /**
+   * Concurrent chunk reads across all views of this reader.
+   * @default 6
+   */
+  readonly maxRequests?: number;
+
   /** Cancels metadata and coordinate reads. Frame reads accept their own signal. */
   readonly signal?: AbortSignal;
 }
 
 /** An open field that can read one time step at a time. */
 export interface ZarrVolume {
+  /** Metadata-only geometry for camera queries. Custom frame-only readers may omit it. */
+  readonly geometry?: VoxelGeometry;
+
+  /** Optional viewport-aware path; the result contains only selected chunks and NaN elsewhere. */
+  readView?(index: number, options: ZarrViewOptions): Promise<VoxelData>;
+
+  /** Releases an owned reader's decoded cache and pending chunk reads. */
+  dispose?(): void;
+
   /** Number of frames. An array with no time axis has one frame. */
   readonly frameCount: number;
 
@@ -105,8 +127,8 @@ const DEFAULT_MAX_CELLS = 2_000_000;
 
 /**
  * Opens a float32 volume from a Zarr v2 or v3 store. This reads metadata and any needed
- * coordinates. Call readFrame to fetch the data values. GeoZarr metadata can tell us
- * where the grid sits on a map. With plain Zarr, put that information in layout.
+ * coordinates. Use readView for progressive camera queries or readFrame for the whole grid.
+ * GeoZarr metadata describes placement on a map; plain Zarr uses layout.
  *
  * @param url - HTTP(S) store root. Cross-origin reads require CORS.
  * @param options - Field, grid geometry and frame size limit.
@@ -181,7 +203,26 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
   const yAxis = spatialAxes.indexOf('y');
   const zAxis = spatialAxes.indexOf('z');
 
+  const geometry: VoxelGeometry = grid
+    ? { dimensions: grid.dimensions, origin: grid.origin, spacing: grid.spacing }
+    : { dimensions, ...(layout && { origin: layout.origin, spacing: layout.spacing }) };
+  const view = new VolumeView({
+    array: scalar,
+    axes,
+    dimensions,
+    geometry,
+    frameCount,
+    selection: options.selection ?? {},
+    grid,
+    noDataValue,
+    maxCacheBytes: options.maxCacheBytes ?? 64 * 1024 * 1024,
+    maxRequests: options.maxRequests ?? 6,
+  });
+
   return {
+    geometry,
+    readView: (index, options) => view.read(index, options),
+    dispose: () => view.dispose(),
     frameCount,
     level: geo?.level.path ?? '.',
     /** {@inheritDoc ZarrVolume.readFrame} */

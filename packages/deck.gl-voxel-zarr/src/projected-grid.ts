@@ -28,7 +28,7 @@ interface VerticalGrid {
 }
 
 /** Where the grid sits on the map and which source cells to blend for each row and column. */
-interface ProjectedGrid {
+export interface ProjectedGrid {
   readonly dimensions: Vector3;
   readonly origin: Vector3;
   readonly spacing: Vector3;
@@ -180,12 +180,14 @@ function sampleAxis(index: number, count: number): AxisSample {
  * @param frame - Decoded scalar frame in Z, Y, X dimension order.
  * @param grid - Map grid with source cell indices and blend weights for each row and column.
  * @param noDataValue - Optional number that marks missing cells.
+ * @param available - Optional readiness flags in source stride order; unknown contributors keep a target cell unloaded.
  * @returns A new grid whose flat array changes X fastest.
  */
 export function projectFrame(
   frame: Chunk<'float32'>,
   grid: ProjectedGrid,
   noDataValue?: number,
+  available?: Uint8Array,
 ): VoxelData {
   const [width, height, depth] = grid.dimensions;
   const [strideZ = 0, strideY = 0, strideX = 0] = frame.stride;
@@ -196,6 +198,7 @@ export function projectFrame(
       for (const [x, column] of grid.columns.entries()) {
         let sum = 0;
         let weight = 0;
+        let ready = true;
 
         for (const j of [0, 1] as const) {
           for (const i of [0, 1] as const) {
@@ -203,6 +206,13 @@ export function projectFrame(
             const contribution =
               (i === 0 ? 1 - column[2] : column[2]) * (j === 0 ? 1 - row[2] : row[2]);
 
+            if (
+              contribution > 0 &&
+              available &&
+              !available[z * strideZ + row[j] * strideY + column[i] * strideX]
+            ) {
+              ready = false;
+            }
             if (value !== undefined && Number.isFinite(value) && value !== noDataValue) {
               sum += value * contribution;
               weight += contribution;
@@ -210,7 +220,7 @@ export function projectFrame(
           }
         }
 
-        values[x + width * (y + height * z)] = weight > 0 ? sum / weight : Number.NaN;
+        values[x + width * (y + height * z)] = ready && weight > 0 ? sum / weight : Number.NaN;
       }
     }
   }
