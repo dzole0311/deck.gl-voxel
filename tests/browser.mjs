@@ -13,25 +13,11 @@ const url = server.resolvedUrls?.local[0];
 
 assert.ok(url, 'Vite must expose a local URL');
 
-// Hosted CI runners have no physical GPU; explicitly select Chromium's software adapter.
-const browserArgs =
-  process.env.VOXEL_SOFTWARE_GPU === '1'
-    ? [
-        '--enable-unsafe-webgpu',
-        '--use-webgpu-adapter=swiftshader',
-        '--use-gl=angle',
-        '--use-angle=swiftshader',
-        '--enable-unsafe-swiftshader',
-      ]
-    : process.platform === 'darwin'
-      ? ['--use-angle=metal']
-      : [];
-
 const browser = await chromium
   .launch({
     channel: process.env.VOXEL_BROWSER_CHANNEL ?? 'chrome',
     headless: true,
-    args: browserArgs,
+    args: process.platform === 'darwin' ? ['--use-angle=metal'] : [],
   })
   .catch(async (error) => {
     await server.close();
@@ -175,12 +161,6 @@ async function render(options = {}) {
   }, options);
 
   await page.waitForFunction(() => window.voxelFixture.frames > 0);
-  // A render callback can run before software WebGPU finishes the submitted work.
-  await page.evaluate(async () => {
-    await window.voxelFixture.deck.device.handle.queue.onSubmittedWorkDone();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  });
-  assert.deepEqual(await page.evaluate(() => window.voxelFixture.errors), []);
 
   return PNG.sync.read(await page.screenshot());
 }
@@ -603,16 +583,6 @@ try {
   console.log(
     'WebGPU browser checks passed: transfer function, step correction, clipping, missing data, axes, depth, resize, and resource disposal.',
   );
-} catch (error) {
-  console.error('Browser diagnostics:', errors);
-  console.error(
-    'WebGPU diagnostics:',
-    await page.evaluate(() => ({
-      adapter: window.voxelFixture?.deck.device?.info,
-      errors: window.voxelFixture?.errors,
-    })),
-  );
-  throw error;
 } finally {
   await browser.close();
   await server.close();

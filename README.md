@@ -26,8 +26,6 @@ Open the [local example](http://127.0.0.1:5175/).
 
 Run `pnpm check` and `pnpm test` locally. Run `pnpm test:browser` for rendering tests in Chrome with WebGPU.
 
-[GitHub Actions checks](.github/workflows/checks.yml) run on every pull request and push. The browser job uses Chromium with software rendering on Ubuntu.
-
 ## Formatting and linting
 
 `pnpm install` installs the Lefthook pre-commit hook. Before each commit, it checks staged files with Prettier and Biome. The hook reports errors without changing or staging files.
