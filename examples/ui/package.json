@@ -15,6 +15,10 @@
       "types": "./dist/components/*.d.ts",
       "import": "./dist/components/*.js"
     },
+    "./inspector": {
+      "types": "./dist/inspector.d.ts",
+      "import": "./dist/inspector.js"
+    },
     "./styles.css": "./src/styles.css",
     "./lib/utils": {
       "types": "./dist/lib/utils.d.ts",
