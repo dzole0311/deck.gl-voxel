@@ -8,6 +8,7 @@ export interface ZarrDebugChunk {
   readonly max: Vector3;
   readonly selected: boolean;
   readonly priority: number;
+  /** Ready means data is assembled in the view; it can remain ready after decoded-cache eviction. Cached means reused for this query. */
   readonly status: 'outside' | 'queued' | 'loading' | 'ready' | 'cached' | 'cancelled' | 'error';
 }
 
@@ -15,6 +16,7 @@ export interface ZarrDebugChunk {
 export interface ZarrDebugState {
   readonly frameIndex: number;
   readonly geometry: VoxelGeometry;
+  readonly volumeToClip: readonly number[];
   readonly chunks: readonly ZarrDebugChunk[];
   readonly cacheBytes: number;
   readonly maxCacheBytes: number;
