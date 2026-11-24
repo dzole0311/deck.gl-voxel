@@ -1,7 +1,7 @@
 import type { ZarrDebugState } from 'deck.gl-voxel-zarr';
 import { useEffect, useRef, useState } from 'react';
-import { CHUNK_COLORS, drawChunkOutlines, drawChunkOverview } from './chunk-drawing.js';
-import { Badge } from './components/badge.js';
+import { CAMERA_COLORS, drawCameraOverview } from './camera-drawing.js';
+import { CHUNK_COLORS, drawChunkOutlines } from './chunk-drawing.js';
 import { Button } from './components/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from './components/card.js';
 import { Checkbox } from './components/checkbox.js';
@@ -23,17 +23,19 @@ export interface ChunkInspectorProps {
 
 function signature(state: ZarrDebugState | undefined): string {
   return state
-    ? `${state.frameIndex}:${state.cacheBytes}:${state.reusedView}:${state.chunks.map((chunk) => `${chunk.id}:${chunk.status}:${chunk.priority.toFixed(3)}`).join(';')}`
+    ? `${state.frameIndex}:${state.volumeToClip.join(',')}:${state.cacheBytes}:${state.maxCacheBytes}:${state.reusedView}:${state.chunks.map((chunk) => `${chunk.id}:${chunk.status}:${chunk.priority.toFixed(3)}`).join(';')}`
     : '';
 }
 
 /** Shared example inspector, positioned at the top right using the default light shadcn theme. */
 export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkInspectorProps) {
   const [state, setState] = useState<ZarrDebugState>();
+  const [unsupportedReader, setUnsupportedReader] = useState(false);
+  const [selectionPending, setSelectionPending] = useState(false);
   const [outlines, setOutlines] = useState(true);
-  const [outside, setOutside] = useState(true);
   const [frozen, setFrozen] = useState(false);
   const [selected, setSelected] = useState('');
+  const [cameraMode, setCameraMode] = useState<'2d' | '3d'>('3d');
   const canvas = useRef<HTMLCanvasElement>(null);
   const overview = useRef<HTMLCanvasElement>(null);
   const latest = useRef<ZarrDebugState>(undefined);
@@ -43,16 +45,26 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
     const draw = (): void => {
       drawRequest = undefined;
       const snapshot = latest.current;
+      const selection = snapshot?.chunks.some((chunk) => chunk.id === selected) ? selected : '';
       const matrix = snapshot ? view.getVolumeToClip(snapshot.geometry) : undefined;
+      setSelectionPending(
+        Boolean(snapshot && matrix?.some((value, index) => value !== snapshot.volumeToClip[index])),
+      );
       if (canvas.current) {
         drawChunkOutlines(canvas.current, snapshot, matrix, view.getViewport(), {
           outlines,
-          outside,
-          selected,
+          selected: selection,
         });
       }
       if (overview.current) {
-        drawChunkOverview(overview.current, snapshot, matrix);
+        drawCameraOverview(
+          overview.current,
+          snapshot,
+          matrix,
+          snapshot ? view.getVolumeToCommon(snapshot.geometry) : undefined,
+          cameraMode,
+          selection,
+        );
       }
     };
     const schedule = (): void => {
@@ -60,16 +72,23 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
     };
     const poll = (): void => {
       if (!frozen) {
-        latest.current = view.getReader()?.getDebugState?.();
-        const next = signature(latest.current);
+        const reader = view.getReader();
+        const unsupported = Boolean(reader && !reader.getDebugState);
+        latest.current = reader?.getDebugState?.();
+        if (selected && !latest.current?.chunks.some((chunk) => chunk.id === selected)) {
+          setSelected('');
+        }
+        const next = `${unsupported}:${signature(latest.current)}`;
         if (next !== previous.current) {
           previous.current = next;
           setState(latest.current);
+          setUnsupportedReader(unsupported);
+          schedule();
         }
       }
-      schedule();
     };
     poll();
+    schedule();
     const timer = setInterval(poll, 100);
     const unsubscribe = view.subscribe(schedule);
     window.addEventListener('resize', schedule);
@@ -81,7 +100,7 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
         cancelAnimationFrame(drawRequest);
       }
     };
-  }, [view, outlines, outside, frozen, selected]);
+  }, [view, outlines, frozen, selected, cameraMode]);
   const chunks = state?.chunks ?? [];
   const selectedChunk = chunks.find((chunk) => chunk.id === selected);
   const count = (status: string) => chunks.filter((chunk) => chunk.status === status).length;
@@ -101,21 +120,164 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
         data-loading={count('loading')}
         data-queued={count('queued')}
         data-cached={count('cached')}
-        className="fixed top-4 right-4 z-30 max-h-[calc(100dvh-2rem)] w-80 max-w-[calc(100vw-2rem)] gap-4 overflow-y-auto py-4"
+        className="fixed top-4 right-4 z-30 max-h-[calc(100dvh-2rem)] w-80 max-w-[calc(100vw-2rem)] gap-3 overflow-y-auto py-3"
         role="complementary"
         aria-labelledby="inspector-title"
       >
-        <CardHeader className="flex flex-row items-center justify-between gap-2 px-4">
-          <CardTitle>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 border-b px-3 [.border-b]:pb-3">
+          <CardTitle className="text-sm">
             <h2 id="inspector-title">Chunk inspector</h2>
           </CardTitle>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close chunk inspector">
+          <Button variant="ghost" size="xs" onClick={onClose} aria-label="Close chunk inspector">
             Close
           </Button>
         </CardHeader>
-        <CardContent className="grid gap-4 px-4 text-sm">
-          <div className="grid grid-cols-2 gap-3">
-            <Label>
+        <CardContent className="grid gap-3 px-3 text-sm">
+          <figure className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-medium">Camera</h3>
+              <fieldset aria-label="Camera overview" className="inline-flex border">
+                {(['2d', '3d'] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    variant={cameraMode === mode ? 'secondary' : 'ghost'}
+                    size="xs"
+                    className="rounded-none"
+                    aria-label={`${mode.toUpperCase()} camera view`}
+                    aria-pressed={cameraMode === mode}
+                    onClick={() => setCameraMode(mode)}
+                  >
+                    {mode.toUpperCase()}
+                  </Button>
+                ))}
+              </fieldset>
+            </div>
+            <canvas
+              ref={overview}
+              id="chunk-overview"
+              width={640}
+              height={480}
+              role="img"
+              aria-label={
+                cameraMode === '3d'
+                  ? '3D view of the camera and the volume entry and exit surfaces'
+                  : 'Top view of the camera and the volume extent inside its view'
+              }
+              className="aspect-[4/3] w-full bg-neutral-50"
+            />
+            <figcaption className="grid gap-2 text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="w-10 shrink-0 font-medium text-foreground">View</span>
+                {cameraMode === '3d' ? (
+                  (['entry', 'exit'] as const).map((crossing) => (
+                    <span key={crossing} className="inline-flex items-center gap-1.5">
+                      <span
+                        aria-hidden="true"
+                        className="size-2 border"
+                        style={{
+                          borderColor: CAMERA_COLORS[crossing],
+                          backgroundColor: `${CAMERA_COLORS[crossing]}30`,
+                        }}
+                      />
+                      {crossing === 'entry' ? 'Entry' : 'Exit'}
+                    </span>
+                  ))
+                ) : (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-2 border"
+                      style={{
+                        borderColor: CAMERA_COLORS.entry,
+                        backgroundColor: `${CAMERA_COLORS.entry}18`,
+                      }}
+                    />
+                    In view
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1.5">
+                  <span aria-hidden="true" className="size-2 border border-neutral-500" />
+                  Volume
+                </span>
+              </div>
+              <div className="flex items-start gap-3">
+                <span className="w-10 shrink-0 font-medium text-foreground">Chunks</span>
+                <ul className="flex flex-wrap gap-x-3 gap-y-1" aria-label="Chunk status key">
+                  {(
+                    [
+                      'queued',
+                      'loading',
+                      'ready',
+                      'cached',
+                      'outside',
+                      'cancelled',
+                      'error',
+                    ] as const
+                  )
+                    .filter(
+                      (status) =>
+                        (status !== 'cancelled' && status !== 'error') || count(status) > 0,
+                    )
+                    .map((status) => (
+                      <li key={status} className="inline-flex items-center gap-1.5">
+                        <span
+                          aria-hidden="true"
+                          className="size-2.5 shrink-0"
+                          style={{ backgroundColor: CHUNK_COLORS[status] }}
+                        />
+                        {status === 'cached' ? 'reused' : status}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            </figcaption>
+          </figure>
+          <Separator />
+          <div className="flex h-4 items-center justify-between gap-2 text-xs">
+            <h3 className="font-medium">Data</h3>
+            <p role="status" className="min-w-0 truncate leading-4 text-muted-foreground">
+              {state && frozen
+                ? 'Chunk selection frozen'
+                : state && selectionPending
+                  ? 'Updating chunk selection…'
+                  : state?.reusedView
+                    ? 'Reused assembled view'
+                    : ''}
+            </p>
+          </div>
+          {state ? (
+            <dl
+              id="debug-counters"
+              className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs tabular-nums"
+            >
+              <dt className="text-muted-foreground">Selected chunks</dt>
+              <dd className="text-right">
+                {selectedCount} / {chunks.length}
+              </dd>
+              <dt className="text-muted-foreground">Loading / queued</dt>
+              <dd className="text-right">
+                {count('loading')} / {count('queued')}
+              </dd>
+              <dt className="text-muted-foreground">Ready / reused</dt>
+              <dd className="text-right">
+                {count('ready')} / {count('cached')}
+              </dd>
+              <dt className="text-muted-foreground">CPU cache</dt>
+              <dd className="text-right">
+                {(state.cacheBytes / 1048576).toFixed(1)} /{' '}
+                {(state.maxCacheBytes / 1048576).toFixed(0)} MB
+              </dd>
+            </dl>
+          ) : (
+            <p role="status" className="text-xs text-muted-foreground">
+              {unsupportedReader
+                ? 'This reader does not expose chunk diagnostics'
+                : 'Waiting for chunks'}
+            </p>
+          )}
+          <Separator />
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            <Label className="text-xs">
               <Checkbox
                 id="debug-outlines"
                 checked={outlines}
@@ -123,15 +285,7 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
               />
               Outlines
             </Label>
-            <Label>
-              <Checkbox
-                id="debug-outside"
-                checked={outside}
-                onCheckedChange={(value) => setOutside(value === true)}
-              />
-              Outside view
-            </Label>
-            <Label>
+            <Label className="text-xs">
               <Checkbox
                 id="debug-freeze"
                 checked={frozen}
@@ -140,7 +294,7 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
               Freeze inspector
             </Label>
             {slowRequests ? (
-              <Label>
+              <Label className="text-xs">
                 <Checkbox
                   id="debug-slow"
                   checked={slowRequests.enabled}
@@ -150,88 +304,42 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
               </Label>
             ) : null}
           </div>
-          {onReload ? (
-            <Button id="debug-reload" variant="outline" onClick={onReload}>
-              Clear cache and reload
-            </Button>
-          ) : null}
-          <Separator />
           {state ? (
-            <>
-              <dl id="debug-counters" className="grid grid-cols-2 gap-x-3 gap-y-2 tabular-nums">
-                <dt className="text-muted-foreground">Selected</dt>
-                <dd className="text-right">
-                  {selectedCount} / {chunks.length}
-                </dd>
-                <dt className="text-muted-foreground">Loading / queued</dt>
-                <dd className="text-right">
-                  {count('loading')} / {count('queued')}
-                </dd>
-                <dt className="text-muted-foreground">Ready / reused</dt>
-                <dd className="text-right">
-                  {count('ready')} / {count('cached')}
-                </dd>
-                <dt className="text-muted-foreground">CPU cache</dt>
-                <dd className="text-right">
-                  {(state.cacheBytes / 1048576).toFixed(1)} /{' '}
-                  {(state.maxCacheBytes / 1048576).toFixed(0)} MB
-                </dd>
-              </dl>
-              <div className="flex flex-wrap gap-1.5">
-                {(
-                  ['queued', 'loading', 'ready', 'cached', 'outside', 'cancelled', 'error'] as const
-                ).map((status) => (
-                  <Badge key={status} variant="outline" style={{ color: CHUNK_COLORS[status] }}>
-                    {status === 'cached' ? 'reused' : status}
-                  </Badge>
+            <div className="grid gap-2 [&_[data-slot=native-select-wrapper]]:w-full">
+              <Label htmlFor="debug-chunk" className="text-xs">
+                Chunk
+              </Label>
+              <NativeSelect
+                id="debug-chunk"
+                value={selectedChunk ? selected : ''}
+                onChange={(event) => setSelected(event.target.value)}
+              >
+                <NativeSelectOption value="">All chunks</NativeSelectOption>
+                {chunks.map((chunk) => (
+                  <NativeSelectOption key={chunk.id} value={chunk.id}>
+                    {chunk.id}
+                  </NativeSelectOption>
                 ))}
-              </div>
-              <figure className="space-y-1">
-                <canvas
-                  ref={overview}
-                  id="chunk-overview"
-                  width={560}
-                  height={250}
-                  role="img"
-                  aria-label="Chunk footprints and camera view at the grid's middle height"
-                  className="w-full rounded-md border"
-                />
-                <figcaption className="text-xs text-muted-foreground">
-                  Camera view at mid-height
-                </figcaption>
-              </figure>
-              <div className="grid gap-2 [&_[data-slot=native-select-wrapper]]:w-full">
-                <Label htmlFor="debug-chunk">Chunk</Label>
-                <NativeSelect
-                  id="debug-chunk"
-                  value={selectedChunk ? selected : ''}
-                  onChange={(event) => setSelected(event.target.value)}
-                >
-                  <NativeSelectOption value="">All chunks</NativeSelectOption>
-                  {chunks.map((chunk) => (
-                    <NativeSelectOption key={chunk.id} value={chunk.id}>
-                      {chunk.id}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </div>
+              </NativeSelect>
               {selectedChunk ? (
                 <p id="debug-details" className="text-xs text-muted-foreground">
                   {selectedChunk.status}
                   {selectedChunk.selected ? `, priority ${selectedChunk.priority.toFixed(2)}` : ''}
                 </p>
               ) : null}
-              {state.reusedView ? (
-                <p className="text-xs text-muted-foreground">Reused assembled view</p>
-              ) : null}
-            </>
-          ) : (
-            <p role="status" className="text-muted-foreground">
-              {view.getReader() && !view.getReader()?.getDebugState
-                ? 'This reader does not expose chunk diagnostics'
-                : 'Waiting for chunks'}
-            </p>
-          )}
+            </div>
+          ) : null}
+          {onReload ? (
+            <Button
+              id="debug-reload"
+              variant="outline"
+              size="sm"
+              className="shadow-none"
+              onClick={onReload}
+            >
+              Clear cache and reload
+            </Button>
+          ) : null}
         </CardContent>
       </Card>
     </>

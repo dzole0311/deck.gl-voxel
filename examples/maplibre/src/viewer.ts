@@ -9,6 +9,10 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import type { Dataset } from './datasets.js';
 import { pickVolumeSample } from './volume-hover.js';
 
+const FRAME_CACHE_BYTES = 128 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 20_000;
+const SLOW_REQUEST_TIMEOUT_MS = 60_000;
+const SLOW_REQUEST_DELAY_MS = 600;
 const MAP_ANGLE = { pitch: 48, bearing: -12 };
 
 /** Rendering and loading settings controlled by the example UI. */
@@ -192,12 +196,13 @@ export class ExampleViewer implements ChunkInspectorView {
       await new Promise<void>((resolve, reject) => {
         const abort = (): void => {
           clearTimeout(timer);
+          request.signal.removeEventListener('abort', abort);
           reject(request.signal.reason);
         };
         const timer = setTimeout(() => {
           request.signal.removeEventListener('abort', abort);
           resolve();
-        }, 600);
+        }, SLOW_REQUEST_DELAY_MS);
         request.signal.addEventListener('abort', abort, { once: true });
         if (request.signal.aborted) {
           abort();
@@ -224,9 +229,9 @@ export class ExampleViewer implements ChunkInspectorView {
           fetch: this.fetch,
           frameIndex: settings.frameIndex,
           preload: settings.playing,
-          maxCacheBytes: 128 * 1024 * 1024,
+          maxCacheBytes: FRAME_CACHE_BYTES,
           maxRequests: settings.slowRequests && typeof dataset.volumeSource === 'string' ? 2 : 6,
-          requestTimeout: settings.slowRequests ? 60_000 : 20_000,
+          requestTimeout: settings.slowRequests ? SLOW_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
           modelMatrix: this.matrix,
           renderMode: settings.renderMode,
           isovalue: settings.isovalue,
@@ -308,6 +313,13 @@ export class ExampleViewer implements ChunkInspectorView {
       ? new Matrix4(viewport.viewProjectionMatrix).multiplyRight(
           getVoxelVolumeToCommon({ volume: geometry, modelMatrix: this.matrix }, viewport),
         )
+      : undefined;
+  }
+  /** Preserves the displayed volume's proportions in the camera overview. */
+  getVolumeToCommon(geometry: VoxelGeometry): readonly number[] | undefined {
+    const viewport = this.deck.isInitialized ? this.deck.getViewports()[0] : undefined;
+    return viewport
+      ? getVoxelVolumeToCommon({ volume: geometry, modelMatrix: this.matrix }, viewport)
       : undefined;
   }
   /** View bounds in browser CSS pixels, including the canvas offset. */
