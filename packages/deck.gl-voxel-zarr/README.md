@@ -9,15 +9,12 @@ See [`ZarrVolumeOptions`](src/zarr-volume.ts#L33) and the [GeoZarr conventions](
 ```ts
 import { openZarrVolume } from 'deck.gl-voxel-zarr';
 
-const clouds = await openZarrVolume(
-  'https://helene-voxel-329134478190-eu-central-1.s3.eu-central-1.amazonaws.com/era5-helene.zarr',
-  {
-    field: 'fraction_of_cloud_cover',
-    level: '2',
-    verticalDimension: 'height',
-    verticalCoordinates: 'height',
-  },
-);
+const clouds = await openZarrVolume('https://example-bucket.s3.amazonaws.com/volume.zarr', {
+  field: 'fraction_of_cloud_cover',
+  level: '2',
+  verticalDimension: 'height',
+  verticalCoordinates: 'height',
+});
 
 const volume = await clouds.readFrame(36);
 ```
@@ -39,4 +36,25 @@ const temperature = await openZarrVolume(new URL('/data/experiment.zarr', locati
 });
 
 const volume = await temperature.readFrame(0);
+```
+
+## Layer usage
+
+```ts
+import { ZarrVoxelLayer } from 'deck.gl-voxel-zarr';
+
+const layer = new ZarrVoxelLayer({
+  id: 'clouds',
+  source: 'https://example-bucket.s3.amazonaws.com/volume.zarr',
+  sourceOptions: {
+    field: 'fraction_of_cloud_cover',
+    level: '2',
+    verticalDimension: 'height',
+    verticalCoordinates: 'height',
+  },
+  frameIndex: 36,
+  valueRange: [0, 1],
+  showBounds: true,
+  onError: (error) => console.error(error),
+});
 ```
