@@ -1,6 +1,6 @@
 import type { Viewport } from '@deck.gl/core';
 import { Matrix4 } from '@math.gl/core';
-import type { VoxelLayerProps } from './types.js';
+import type { VoxelGeometry, VoxelLayerProps } from './types.js';
 import { getExtent } from './volume.js';
 
 /**
@@ -80,7 +80,7 @@ export function createVoxelUniforms(
   const opacityUnitDistance = props.opacityUnitDistance ?? Math.min(...spacing.map(Math.abs));
 
   const volumeToView = new Matrix4(viewport.viewMatrix).multiplyRight(
-    getVolumeToCommon(props, viewport),
+    getVoxelVolumeToCommon(props, viewport),
   );
   const volumeToClip = new Matrix4(viewport.projectionMatrix).multiplyRight(volumeToView);
   const determinant = volumeToClip.determinant();
@@ -173,7 +173,12 @@ export function createVoxelUniforms(
  * @throws {Error} If the coordinate system is unsupported.
  * @see https://deck.gl/docs/developer-guide/coordinate-systems#common-space
  */
-function getVolumeToCommon(props: VoxelLayerProps, viewport: Viewport): Matrix4 {
+export function getVoxelVolumeToCommon(
+  props: Pick<VoxelLayerProps, 'coordinateSystem' | 'coordinateOrigin' | 'modelMatrix'> & {
+    volume: VoxelGeometry;
+  },
+  viewport: Viewport,
+): Matrix4 {
   if (viewport.resolution !== undefined) {
     throw new Error('VoxelLayer does not support GlobeView.');
   }
