@@ -179,3 +179,67 @@ test('detects GeoZarr projection inherited from a parent and applies the array a
 
   assert.deepEqual(await plain.readFrame(0), frame);
 });
+
+test('selects a forecast run and ensemble member without downloading other chunks', async (context) => {
+  const shape = [2, 3, 2, 1, 1, 2];
+  const chunks = [1, 1, 1, 1, 1, 2];
+  const requests = serveStore(context, {
+    '/grid/zarr.json': v3Array(shape, chunks),
+    '/grid/c/1/2/1/0/0/0': new Float32Array([12, 13]),
+  });
+  const options = {
+    field: 'grid',
+    layout: { axes: [null, null, 'time', 'z', 'y', 'x'], origin: [0, 0, 0], spacing: [1, 1, 1] },
+    selection: { 0: 1, 1: 2 },
+  };
+  const reader = await openZarrVolume(storeUrl, options);
+  assert.equal(reader.frameCount, 2);
+  const frame = await reader.readFrame(1);
+  assert.deepEqual(frame.dimensions, [2, 1, 1]);
+  assert.deepEqual([...frame.values], [12, 13]);
+  assert.deepEqual(
+    requests.filter((path) => path.includes('/c/')),
+    ['/grid/c/1/2/1/0/0/0'],
+  );
+  await assert.rejects(
+    openZarrVolume(storeUrl, { ...options, selection: { 0: 1 } }),
+    /requires a selection/,
+  );
+  await assert.rejects(
+    openZarrVolume(storeUrl, { ...options, selection: { 0: 2, 1: 0 } }),
+    /in-range integer/,
+  );
+  await assert.rejects(
+    openZarrVolume(storeUrl, { ...options, selection: { 0: 1, 1: 0, 2: 0 } }),
+    /null axis/,
+  );
+});
+
+test('GeoZarr derives permuted spatial axes and selects an extra named dimension', async (context) => {
+  const attributes = {
+    'proj:code': 'EPSG:4326',
+    'spatial:dimensions': ['lat', 'lon'],
+    'spatial:transform': [1, 0, 0, 0, -1, 2],
+    'spatial:shape': [2, 2],
+  };
+  serveStore(context, {
+    '/grid/zarr.json': v3Array(
+      [2, 2, 2, 2],
+      [1, 2, 2, 2],
+      ['run', 'lon', 'height', 'lat'],
+      attributes,
+    ),
+    '/grid/c/1/0/0/0': new Float32Array([0, 1, 2, 3, 4, 5, 6, 7]),
+    '/height/zarr.json': v3Array([2], [2], ['height'], { units: 'm' }),
+    '/height/c/0': new Float32Array([5, 15]),
+  });
+  const reader = await openZarrVolume(storeUrl, {
+    field: 'grid',
+    verticalDimension: 'height',
+    verticalCoordinates: 'height',
+    selection: { 0: 1 },
+  });
+  const frame = await reader.readFrame(0);
+  assert.deepEqual(frame.dimensions, [2, 2, 2]);
+  assert.deepEqual([...frame.values].map(Math.round), [1, 5, 0, 4, 3, 7, 2, 6]);
+});
