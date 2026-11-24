@@ -4,12 +4,22 @@ import {
   type Layer,
   type UpdateParameters,
 } from '@deck.gl/core';
-import { type VoxelData, VoxelLayer, type VoxelLayerProps } from 'deck.gl-voxel';
+import { Matrix4 } from '@math.gl/core';
+import {
+  getVoxelVolumeToCommon,
+  type VoxelData,
+  VoxelLayer,
+  type VoxelLayerProps,
+} from 'deck.gl-voxel';
 import { FrameCache } from './frame-cache.js';
+import type { ZarrViewOptions } from './volume-view.js';
 import { openZarrVolume, type ZarrVolume, type ZarrVolumeOptions } from './zarr-volume.js';
 
 /** Options for {@link openZarrVolume}; the layer owns cancellation of metadata and frame reads. */
-export type ZarrLayerSourceOptions = Omit<ZarrVolumeOptions, 'signal' | 'fetch'>;
+export type ZarrLayerSourceOptions = Omit<
+  ZarrVolumeOptions,
+  'signal' | 'fetch' | 'maxCacheBytes' | 'maxRequests'
+>;
 
 /** Request settings for URL sources; Zarrita owns decoding and the layer owns cancellation. */
 export interface ZarrLoadOptions {
@@ -32,10 +42,16 @@ export interface ZarrFetchContext {
 /** Returns a raw response; Zarrita, rather than loaders.gl, decodes the bytes. */
 export type ZarrFetch = (url: string, context: ZarrFetchContext) => Response | Promise<Response>;
 
+/** Layer limits for custom readers; chunk readers must share the byte budget across their caches. */
+export interface ZarrSourceContext {
+  readonly maxCacheBytes: number;
+  readonly maxRequests: number;
+}
+
 /** Render settings for a URL-backed volume. Equivalent sourceOptions preserve the opened reader. */
 export type ZarrVoxelLayerProps = Omit<VoxelLayerProps, 'volume' | 'fetch' | 'loadOptions'> & {
-  /** HTTP(S) store root, or an opener for derived/virtual Zarr fields. The layer supplies cancellation. */
-  source: string | ((signal: AbortSignal) => Promise<ZarrVolume>);
+  /** HTTP(S) store root, or an opener for derived/virtual Zarr fields. The layer supplies cancellation and cache limits. */
+  source: string | ((signal: AbortSignal, context: ZarrSourceContext) => Promise<ZarrVolume>);
   /** URL-source selection passed to {@link openZarrVolume}; defaults to the root field. Ignored for openers. */
   sourceOptions?: ZarrLayerSourceOptions;
   /** URL-source request hook. Return a raw Response and preserve context.request when rewriting URLs. Custom source openers own their transport. */
@@ -48,14 +64,14 @@ export type ZarrVoxelLayerProps = Omit<VoxelLayerProps, 'volume' | 'fetch' | 'lo
    */
   frameIndex?: number;
   /**
-   * Buffer two following frames before playback, then warm the remaining timeline sequentially.
-   * Reads share the frame cache; disabling preload cancels background work.
+   * Buffer the next two visible frames. Frame-only readers also warm the remaining timeline.
+   * Reads share the decoded cache; disabling preload cancels background work.
    * @default false
    */
   preload?: boolean;
   /**
-   * Cached scalar-array byte limit, excluding the displayed volume, in-flight reads and GPU resources.
-   * Least recently used frames are evicted; oversized frames are displayed without caching.
+   * Decoded cache byte limit, excluding displayed grids, in-flight reads and GPU resources.
+   * Evicts least recently used chunks, or whole frames for frame-only readers.
    * @default 67108864
    */
   maxCacheBytes?: number;
@@ -64,9 +80,21 @@ export type ZarrVoxelLayerProps = Omit<VoxelLayerProps, 'volume' | 'fetch' | 'lo
    * @default 0
    */
   requestTimeout?: number;
+  /**
+   * Concurrent decoded chunk reads; custom openers receive this limit in their context.
+   * @default 6
+   */
+  maxRequests?: number;
+  /**
+   * Quiet time in milliseconds before camera-driven reads. Frame changes load immediately.
+   * @default 80
+   */
+  debounceTime?: number;
+  /** Observes immutable partial snapshots while loading remains true. Unloaded cells are NaN. */
+  onVolumeProgress?: (volume: VoxelData) => void;
   /** Reports metadata readiness; the layer retains ownership of pending reads. */
   onSourceLoad?: (reader: ZarrVolume) => void;
-  /** Observes the complete frame after it becomes drawable. Treat its values as immutable. */
+  /** Observes a completed view or frame. Camera changes can call this again for the same frame. Values are immutable. */
   onVolumeLoad?: (volume: VoxelData) => void;
   /** Reports current-frame loading and initial playback buffering, including failures returning to idle. */
   onLoadStateChange?: (loading: boolean) => void;
@@ -109,10 +137,10 @@ const fetchZarrRequest: ZarrFetch = (url, { request }) =>
   globalThis.fetch(new Request(url, request));
 
 /**
- * Loads whole frames from a Zarr URL or derived-field opener and renders them with {@link VoxelLayer}.
- * Stable layer IDs preserve the opened reader across style and frame updates. Replacing
- * source or changing sourceOptions values cancels old work. Previous data stays visible until a complete
- * replacement arrives; superseded reads cannot publish. Finalization cancels all reads.
+ * Loads visible Zarr chunks progressively and renders them with {@link VoxelLayer}.
+ * Custom frame-only readers retain whole-frame loading. Stable layer IDs preserve the opened reader
+ * across style and frame updates. Source changes cancel old work; superseded reads cannot publish.
+ * Previous data remains visible until a partial or complete replacement arrives. Finalization cancels all reads.
  * The child VoxelLayer owns its GPU resources and releases them when deck.gl replaces
  * its volume or finalizes the child. Reader format and frame-size limits apply.
  */
@@ -126,16 +154,21 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
     loadOptions: { type: 'object', value: {}, equal: equalOptions },
     frameIndex: 0,
     preload: false,
+    maxRequests: 6,
+    debounceTime: 80,
     maxCacheBytes: DEFAULT_MAX_CACHE_BYTES,
     requestTimeout: DEFAULT_REQUEST_TIMEOUT,
   };
 
   declare state: {
     volume: VoxelData | undefined;
+    completeVolume: VoxelData | undefined;
     loading: boolean;
     buffering: boolean;
     lifecycle: {
       reader: Promise<FrameCache> | undefined;
+      volumeReader: ZarrVolume | undefined;
+      timer: ReturnType<typeof setTimeout> | undefined;
       cache: FrameCache | undefined;
       opening: AbortController | undefined;
       reading: AbortController | undefined;
@@ -151,10 +184,13 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
   override initializeState(): void {
     this.setState({
       volume: undefined,
+      completeVolume: undefined,
       loading: false,
       buffering: false,
       lifecycle: {
         reader: undefined,
+        volumeReader: undefined,
+        timer: undefined,
         cache: undefined,
         opening: undefined,
         reading: undefined,
@@ -173,7 +209,11 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
     );
   }
 
-  override updateState({ props, oldProps }: UpdateParameters<this>): void {
+  override shouldUpdateState(params: UpdateParameters<this>): boolean {
+    return super.shouldUpdateState(params) || Boolean(params.changeFlags.viewportChanged);
+  }
+
+  override updateState({ props, oldProps, changeFlags }: UpdateParameters<this>): void {
     const lifecycle = this.state.lifecycle;
     const sourceChanged =
       !lifecycle.reader ||
@@ -182,9 +222,14 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
       props.fetch !== oldProps.fetch ||
       !equalOptions(props.loadOptions, oldProps.loadOptions) ||
       props.maxCacheBytes !== oldProps.maxCacheBytes ||
+      props.maxRequests !== oldProps.maxRequests ||
       props.requestTimeout !== oldProps.requestTimeout;
 
     if (sourceChanged) {
+      clearTimeout(lifecycle.timer);
+      lifecycle.timer = undefined;
+      lifecycle.volumeReader?.dispose?.();
+      lifecycle.volumeReader = undefined;
       lifecycle.opening?.abort();
       lifecycle.reading?.abort();
       this.cancelPreload();
@@ -197,6 +242,7 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
           request.signal.throwIfAborted();
           const maxBytes = props.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES;
           const timeout = props.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
+          const maxRequests = props.maxRequests ?? 6;
           if (
             !Number.isSafeInteger(maxBytes) ||
             maxBytes < 0 ||
@@ -205,20 +251,32 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
           ) {
             throw new Error('maxCacheBytes and requestTimeout must be nonnegative safe integers.');
           }
+          if (!Number.isSafeInteger(maxRequests) || maxRequests < 1) {
+            throw new Error('maxRequests must be a positive safe integer.');
+          }
           const signal = this.requestSignal(request);
           const reader = await (typeof props.source === 'function'
-            ? props.source(signal)
+            ? props.source(signal, { maxCacheBytes: maxBytes, maxRequests })
             : openZarrVolume(props.source, {
                 field: '.',
                 ...props.sourceOptions,
                 signal,
                 fetch: this.createTransport(),
+                maxCacheBytes: maxBytes,
+                maxRequests,
               }));
-          signal.throwIfAborted();
+          if (signal.aborted) {
+            reader.dispose?.();
+            signal.throwIfAborted();
+          }
           return reader;
         })
         .then((reader) => {
+          if (request.signal.aborted) {
+            reader.dispose?.();
+          }
           request.signal.throwIfAborted();
+          lifecycle.volumeReader = reader;
           this.current.props.onSourceLoad?.(reader);
           const cache = new FrameCache(reader, props.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES);
           lifecycle.cache = cache;
@@ -227,7 +285,26 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
     }
 
     if (sourceChanged || props.frameIndex !== oldProps.frameIndex) {
+      clearTimeout(lifecycle.timer);
+      lifecycle.timer = undefined;
       void this.readFrame();
+    } else if (
+      lifecycle.volumeReader?.readView &&
+      (changeFlags?.viewportChanged ||
+        props.modelMatrix !== oldProps.modelMatrix ||
+        props.coordinateSystem !== oldProps.coordinateSystem ||
+        !equalOptions(props.coordinateOrigin, oldProps.coordinateOrigin) ||
+        !equalOptions(props.clipBounds, oldProps.clipBounds))
+    ) {
+      this.cancelPreload();
+      lifecycle.reading?.abort();
+      lifecycle.reading = undefined;
+      clearTimeout(lifecycle.timer);
+      this.setActivity('loading', true);
+      lifecycle.timer = setTimeout(() => {
+        lifecycle.timer = undefined;
+        void this.current.readFrame();
+      }, props.debounceTime ?? 80);
     } else if (props.preload !== oldProps.preload) {
       if (props.preload) {
         if (lifecycle.cache) {
@@ -280,6 +357,23 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
     };
   }
 
+  private viewOptions(signal: AbortSignal): ZarrViewOptions | undefined {
+    const current = this.current;
+    const reader = current.state.lifecycle.volumeReader;
+    const viewport = current.context?.viewport;
+    if (!reader?.readView || !reader.geometry || !viewport) {
+      return undefined;
+    }
+    const volumeToClip = new Matrix4(viewport.viewProjectionMatrix).multiplyRight(
+      getVoxelVolumeToCommon({ ...current.props, volume: reader.geometry }, viewport),
+    );
+    return {
+      volumeToClip,
+      signal,
+      ...(current.props.clipBounds && { clipBounds: current.props.clipBounds }),
+    };
+  }
+
   private requestSignal(request: AbortController): AbortSignal {
     const timeout = this.props.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
     return timeout > 0
@@ -305,24 +399,40 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
 
   private startPreload(cache: FrameCache): void {
     const lifecycle = this.state.lifecycle;
-    if (!this.props.preload || lifecycle.preloading || cache.isComplete || cache.frameCount < 2) {
+    if (
+      !this.props.preload ||
+      lifecycle.preloading ||
+      (!lifecycle.volumeReader?.readView && cache.isComplete) ||
+      cache.frameCount < 2
+    ) {
       return;
     }
     const request = new AbortController();
     lifecycle.preloading = request;
     const start = this.props.frameIndex ?? 0;
     const count = Math.min(2, cache.frameCount - 1);
+    const reader = lifecycle.volumeReader;
+    const view = this.viewOptions(request.signal);
     this.setActivity(
       'buffering',
-      Array.from({ length: count }, (_, offset) =>
-        cache.has((start + offset + 1) % cache.frameCount),
-      ).includes(false),
+      Boolean(view) ||
+        Array.from({ length: count }, (_, offset) =>
+          cache.has((start + offset + 1) % cache.frameCount),
+        ).includes(false),
     );
     void (async () => {
       try {
-        for (let offset = 1; offset <= cache.frameCount; offset++) {
+        for (let offset = 1; offset <= (view ? count : cache.frameCount); offset++) {
           const signal = this.requestSignal(request);
-          await cache.read((start + offset) % cache.frameCount, signal);
+          if (view && reader?.readView) {
+            await reader.readView((start + offset) % cache.frameCount, {
+              ...view,
+              signal,
+              priority: 1000,
+            });
+          } else {
+            await cache.read((start + offset) % cache.frameCount, signal);
+          }
           signal.throwIfAborted();
           if (offset === count) {
             this.setActivity('buffering', false);
@@ -359,15 +469,32 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
         return;
       }
       const signal = this.requestSignal(request);
-      const volume = await cache.read(index, signal);
+      const reader = lifecycle.volumeReader;
+      const view = this.viewOptions(signal);
+      const volume =
+        view && reader?.readView
+          ? await reader.readView(index, {
+              ...view,
+              onProgress: (partial) => {
+                if (!signal.aborted) {
+                  const current = this.current;
+                  current.setState({ volume: partial });
+                  current.props.onVolumeProgress?.(partial);
+                }
+              },
+            })
+          : await cache.read(index, signal);
       signal.throwIfAborted();
       request.signal.throwIfAborted();
       const current = this.current;
-      current.setState({ volume });
+      current.setState({ volume, completeVolume: volume });
       current.props.onVolumeLoad?.(volume);
       current.startPreload(cache);
     } catch (error: unknown) {
       if (!request.signal.aborted) {
+        if (this.current.state.completeVolume) {
+          this.current.setState({ volume: this.current.state.completeVolume });
+        }
         this.current.raiseError(
           error instanceof Error ? error : new Error(String(error)),
           'loading Zarr volume',
@@ -391,6 +518,9 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
       sourceOptions: _sourceOptions,
       frameIndex: _frameIndex,
       preload: _preload,
+      maxRequests: _maxRequests,
+      debounceTime: _debounceTime,
+      onVolumeProgress: _onVolumeProgress,
       maxCacheBytes: _maxCacheBytes,
       requestTimeout: _requestTimeout,
       onSourceLoad: _onSourceLoad,
@@ -402,6 +532,10 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
   }
 
   override finalizeState(): void {
+    clearTimeout(this.state.lifecycle.timer);
+    this.state.lifecycle.timer = undefined;
+    this.state.lifecycle.volumeReader?.dispose?.();
+    this.state.lifecycle.volumeReader = undefined;
     this.state.lifecycle.opening?.abort();
     this.state.lifecycle.preloading?.abort();
     this.state.lifecycle.preloading = undefined;

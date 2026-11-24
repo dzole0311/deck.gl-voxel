@@ -16,6 +16,7 @@ export {
   type ZarrFetchContext,
   type ZarrLayerSourceOptions,
   type ZarrLoadOptions,
+  type ZarrSourceContext,
   ZarrVoxelLayer,
   type ZarrVoxelLayerProps,
 } from './zarr-voxel-layer.js';
