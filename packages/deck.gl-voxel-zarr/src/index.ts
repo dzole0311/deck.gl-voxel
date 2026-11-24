@@ -1,3 +1,4 @@
+export { ChunkCache, type ChunkCacheOptions } from './chunk-cache.js';
 export { projectGeographicVolume } from './projected-grid.js';
 export {
   type GeoZarrVolume,
