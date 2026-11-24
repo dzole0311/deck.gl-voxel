@@ -13,11 +13,25 @@ const url = server.resolvedUrls?.local[0];
 
 assert.ok(url, 'Vite must expose a local URL');
 
+// Hosted CI runners have no physical GPU; explicitly select Chromium's software adapter.
+const browserArgs =
+  process.env.VOXEL_SOFTWARE_GPU === '1'
+    ? [
+        '--enable-unsafe-webgpu',
+        '--use-webgpu-adapter=swiftshader',
+        '--use-gl=angle',
+        '--use-angle=swiftshader',
+        '--enable-unsafe-swiftshader',
+      ]
+    : process.platform === 'darwin'
+      ? ['--use-angle=metal']
+      : [];
+
 const browser = await chromium
   .launch({
     channel: process.env.VOXEL_BROWSER_CHANNEL ?? 'chrome',
     headless: true,
-    args: process.platform === 'darwin' ? ['--use-angle=metal'] : [],
+    args: browserArgs,
   })
   .catch(async (error) => {
     await server.close();
