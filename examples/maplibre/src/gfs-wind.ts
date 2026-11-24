@@ -1,10 +1,8 @@
 import type { GribberishCodecConfiguration } from '@mattnucc/gribberish/zarr';
 import type { VoxelData } from 'deck.gl-voxel';
-import { projectGeographicVolume } from 'deck.gl-voxel-zarr';
+import { projectGeographicVolume, type ZarrVolume } from 'deck.gl-voxel-zarr';
 import { IcechunkStore } from 'icechunk-js';
 import { get, open, registry, slice } from 'zarrita';
-
-import type { VolumeReader } from './datasets.js';
 
 const COLLECTION = 'https://stac.dynamical.org/noaa-gfs-forecast-virtual/collection.json';
 const GROUP = 'height_above_mean_sea_level';
@@ -44,7 +42,7 @@ export async function openGfsWind(
   firstTime: number,
   stepHours: number,
   signal: AbortSignal,
-): Promise<VolumeReader> {
+): Promise<ZarrVolume> {
   const response = await fetch(COLLECTION, { signal });
 
   if (!response.ok) {
@@ -111,6 +109,7 @@ export async function openGfsWind(
   const endHeight = (heightPairs.at(-1)?.upper ?? 0) + 1;
   return {
     frameCount: FRAME_COUNT,
+    level: '.',
     /**
      * Loads both wind directions for one forecast hour and combines them into wind speed.
      * @param index - Zero-based index in the displayed forecast times.
