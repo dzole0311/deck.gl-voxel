@@ -105,6 +105,7 @@ export function createChunkedVolume(options: ChunkedVolumeOptions): ZarrVolume {
     geometry,
     frameCount: options.frameCount,
     level: '.',
+    getDebugState: () => view.getDebugState(),
     readView: (index, query) => view.read(index, query),
     readFrame: (index, signal = new AbortController().signal) =>
       view.read(index, {
