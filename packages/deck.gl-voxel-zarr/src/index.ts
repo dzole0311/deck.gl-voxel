@@ -8,3 +8,11 @@ export {
   type ZarrVolumeLayout,
   type ZarrVolumeOptions,
 } from './zarr-volume.js';
+export {
+  type ZarrFetch,
+  type ZarrFetchContext,
+  type ZarrLayerSourceOptions,
+  type ZarrLoadOptions,
+  ZarrVoxelLayer,
+  type ZarrVoxelLayerProps,
+} from './zarr-voxel-layer.js';

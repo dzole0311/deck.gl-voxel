@@ -5,13 +5,14 @@ import { hasGeoZarrMetadata, readGeoZarrField, readSpatialAttributes } from './g
 import { createProjectedGrid, projectFrame } from './projected-grid.js';
 
 /** Labels for the stored array's dimensions. */
-export type Axis = 'x' | 'y' | 'z' | 'time';
+export type Axis = 'x' | 'y' | 'z' | 'time' | null;
 
 /** Describes how to place a plain Zarr array in 3D. */
 export interface ZarrVolumeLayout {
   /**
    * One label per dimension in the order used by the store. For example, an array shaped
    * [hours, levels, rows, columns] uses ['time', 'z', 'y', 'x']. Include X, Y and Z once each.
+   * Use null for extra dimensions selected by a fixed index in {@link ZarrVolumeOptions.selection}.
    */
   readonly axes: readonly Axis[];
 
@@ -65,6 +66,17 @@ export interface ZarrVolumeOptions {
    */
   readonly maxCells?: number;
 
+  /**
+   * Fixed indices keyed by zero-based stored dimension number, for example `{ 0: 2 }`
+   * selects forecast run 2 on a leading null axis. Every null axis requires an index.
+   * Spatial and time axes cannot be selected here.
+   * @default {}
+   */
+  readonly selection?: Readonly<Record<number, number>>;
+
+  /** Intercepts every metadata, coordinate, chunk and shard-range request. Preserve the request's Range header and signal. */
+  readonly fetch?: (request: Request) => Promise<Response>;
+
   /** Cancels metadata and coordinate reads. Frame reads accept their own signal. */
   readonly signal?: AbortSignal;
 }
@@ -111,7 +123,14 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
     throw new Error('maxCells must be a positive safe integer.');
   }
 
-  const location = root(withRangeCoalescing(new FetchStore(url, { useSuffixRequest: true })));
+  const location = root(
+    withRangeCoalescing(
+      new FetchStore(url, {
+        useSuffixRequest: true,
+        ...(options.fetch && { fetch: options.fetch }),
+      }),
+    ),
+  );
   const openOptions = signal ? { signal } : {};
   const node = await open(location.resolve(field), openOptions);
   const attributes = await readSpatialAttributes(location, node, openOptions);
@@ -141,7 +160,12 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
     throw new Error('Expected a float32 Zarr array.');
   }
 
-  const { dimensions, frameCount } = getFrameShape(array.shape, axes, maxCells);
+  const { dimensions, frameCount } = getFrameShape(
+    array.shape,
+    axes,
+    maxCells,
+    options.selection ?? {},
+  );
   const [width, height, depth] = dimensions;
 
   if (geo && (width !== geo.level.arrayWidth || height !== geo.level.arrayHeight)) {
@@ -152,7 +176,7 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
   const scalar = array;
   const fillValue = scalar.attrs._FillValue;
   const noDataValue = typeof fillValue === 'number' ? Math.fround(fillValue) : undefined;
-  const spatialAxes = axes.filter((axis) => axis !== 'time');
+  const spatialAxes = axes.filter((axis) => axis !== 'time' && axis !== null);
   const xAxis = spatialAxes.indexOf('x');
   const yAxis = spatialAxes.indexOf('y');
   const zAxis = spatialAxes.indexOf('z');
@@ -168,7 +192,9 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
 
       frameSignal?.throwIfAborted();
 
-      const selection = axes.map((axis) => (axis === 'time' ? index : null));
+      const selection = axes.map((axis, dimension) =>
+        axis === 'time' ? index : axis === null ? (options.selection?.[dimension] ?? 0) : null,
+      );
       const frame = await get(scalar, selection, frameSignal ? { signal: frameSignal } : {});
       const strideZ = frame.stride[zAxis];
       const strideY = frame.stride[yAxis];
@@ -234,6 +260,7 @@ export function openGeoZarrVolume(
  * @param shape - Lengths of the array dimensions in storage order.
  * @param axes - Labels for those dimensions in the same order.
  * @param maxCells - Maximum cells in one frame.
+ * @param selection - Fixed indices for extra stored dimensions labeled null.
  * @returns Validated XYZ dimensions and time length.
  * @throws {Error} If the array shape, axis mapping, or frame size is unsupported.
  */
@@ -241,6 +268,7 @@ function getFrameShape(
   shape: readonly number[],
   axes: readonly Axis[],
   maxCells: number,
+  selection: Readonly<Record<number, number>>,
 ): { dimensions: Vector3; frameCount: number } {
   const width = shape[axes.indexOf('x')];
   const height = shape[axes.indexOf('y')];
@@ -250,7 +278,10 @@ function getFrameShape(
 
   if (
     axes.length !== shape.length ||
-    axes.length !== (timeAxis === -1 ? 3 : 4) ||
+    axes.filter((axis) => axis === 'x').length !== 1 ||
+    axes.filter((axis) => axis === 'y').length !== 1 ||
+    axes.filter((axis) => axis === 'z').length !== 1 ||
+    axes.filter((axis) => axis === 'time').length > 1 ||
     width === undefined ||
     height === undefined ||
     depth === undefined ||
@@ -258,6 +289,24 @@ function getFrameShape(
     !shape.every((size) => Number.isSafeInteger(size) && size > 0)
   ) {
     throw new Error('Expected three spatial axes and at most one time axis.');
+  }
+
+  for (const [dimension, index] of Object.entries(selection)) {
+    const axisIndex = Number(dimension);
+    const size = shape[axisIndex];
+    if (
+      !Number.isSafeInteger(axisIndex) ||
+      size === undefined ||
+      axes[axisIndex] !== null ||
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      index >= size
+    ) {
+      throw new Error('Selection requires an in-range integer index on a null axis.');
+    }
+  }
+  if (axes.some((axis, dimension) => axis === null && selection[dimension] === undefined)) {
+    throw new Error('Every null axis requires a selection index.');
   }
 
   const cells = width * height * depth;

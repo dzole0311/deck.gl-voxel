@@ -1,11 +1,11 @@
 import { Deck, MapView, type MapViewState } from '@deck.gl/core';
 import { webgpuAdapter } from '@luma.gl/webgpu';
 import { Matrix4 } from '@math.gl/core';
-import { type VoxelData, VoxelLayer } from 'deck.gl-voxel';
+import type { VoxelData } from 'deck.gl-voxel';
+import { ZarrVoxelLayer } from 'deck.gl-voxel-zarr';
 import { Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { datasets } from './datasets.js';
-import { FrameCache } from './frame-cache.js';
 import { pickVolumeSample } from './volume-hover.js';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
@@ -13,7 +13,7 @@ import './style.css';
 const HOUR_MS = 3_600_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const PLAYBACK_DELAY_MS = 700;
-const PLAYBACK_BUFFER_FRAMES = 2;
+const FRAME_CACHE_BYTES = 128 * 1024 * 1024;
 const STATUS_TEXT = { ready: '', loading: 'Loading…', buffering: 'Buffering…' };
 const MAP_ANGLE = { pitch: 48, bearing: -12 };
 const hourFormat = new Intl.DateTimeFormat('en', {
@@ -75,7 +75,7 @@ function showSliderValue(input: HTMLInputElement, output: HTMLOutputElement, lab
  * Starts the basemap, WebGPU overlay, and dataset and time controls.
  * @throws {Error} If WebGPU is unavailable or a required control is missing.
  */
-async function start(): Promise<void> {
+function start(): void {
   const canvas = getElement('volume', HTMLCanvasElement);
   const datasetPicker = getElement('dataset', HTMLSelectElement);
   const modePicker = getElement('render-mode', HTMLSelectElement);
@@ -93,7 +93,6 @@ async function start(): Promise<void> {
   const exaggeration = getElement('exaggeration', HTMLInputElement);
   const exaggerationValue = getElement('exaggeration-value', HTMLOutputElement);
   const time = getElement('time', HTMLOutputElement);
-  const panel = getElement('controls', HTMLElement);
   const tooltip = getElement('tooltip', HTMLDivElement);
 
   if (!('gpu' in navigator)) {
@@ -132,27 +131,12 @@ async function start(): Promise<void> {
     onError: reportError,
   });
   let modelMatrix = new Matrix4();
-  let frames: FrameCache | undefined;
-  let datasetRequest: AbortController | undefined;
-  let frameRequest: AbortController | undefined;
-  let bufferRequest: AbortController | undefined;
-  let startingPlayback = false;
+  let frameCount = 0;
+  let loading = true;
+  let loadError: Error | undefined;
   let frame: VoxelData | undefined;
   let playing = false;
   let playbackTimer: number | undefined;
-
-  /**
-   * Combines a request's cancellation, the page lifetime and a network timeout.
-   * @param request - Controller for the current request.
-   * @returns A signal that aborts when any of those conditions is met.
-   */
-  function requestSignal(request: AbortController): AbortSignal {
-    return AbortSignal.any([
-      request.signal,
-      lifetime.signal,
-      AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    ]);
-  }
 
   /**
    * Updates playback state and cancels any scheduled advance when paused.
@@ -164,11 +148,6 @@ async function start(): Promise<void> {
 
     if (!enabled) {
       window.clearTimeout(playbackTimer);
-      startingPlayback = false;
-
-      if (panel.dataset.state === 'buffering') {
-        setStatus('ready');
-      }
     }
   }
 
@@ -220,7 +199,7 @@ async function start(): Promise<void> {
       return;
     }
 
-    tooltip.textContent = `${dataset.valueLabel} ${dataset.formatValue(sample.value)} · ${(sample.altitudeMeters / 1000).toFixed(1)} km altitude`;
+    tooltip.textContent = `${dataset.valueLabel} ${dataset.formatValue(sample.value)} - ${(sample.altitudeMeters / 1000).toFixed(1)} km altitude`;
     tooltip.hidden = false;
     tooltip.style.left = `${Math.max(8, Math.min(point.x + 12, window.innerWidth - tooltip.offsetWidth - 8))}px`;
     tooltip.style.top = `${Math.max(8, Math.min(point.y + 12, window.innerHeight - tooltip.offsetHeight - 8))}px`;
@@ -279,55 +258,34 @@ async function start(): Promise<void> {
     density.disabled = isosurface;
   }
 
-  /** Opens the selected dataset and loads its initial frame. */
-  async function loadSelectedDataset(): Promise<void> {
-    const next = datasetPicker.value === 'milton' ? datasets.milton : datasets.helene;
+  /** Selects the source and resets the controls; the layer opens and loads it. */
+  function loadSelectedDataset(): void {
+    dataset = datasetPicker.value === 'milton' ? datasets.milton : datasets.helene;
     setPlaying(false);
-    datasetRequest?.abort();
-    frameRequest?.abort();
-    bufferRequest?.abort();
-    bufferRequest = undefined;
-
-    const request = new AbortController();
-    const signal = requestSignal(request);
-    datasetRequest = request;
-    dataset = next;
-    setExaggeration(next.verticalExaggeration);
-    setDensity(next.density);
-    const [min, max] = next.valueRange;
+    frame = undefined;
+    frameCount = 0;
+    loading = true;
+    loadError = undefined;
+    setExaggeration(dataset.verticalExaggeration);
+    setDensity(dataset.density);
+    const [min, max] = dataset.valueRange;
     isovalue.min = String(min);
     isovalue.max = String(max);
-    isovalue.step = String(next.isovalueStep);
+    isovalue.step = String(dataset.isovalueStep);
     isovalue.valueAsNumber = (min + max) / 2;
     showIsovalue();
     syncRenderControls();
-    frames = undefined;
-    frame = undefined;
     slider.disabled = true;
     play.disabled = true;
-    time.value = '';
-    slider.removeAttribute('aria-valuetext');
-    description.textContent = next.description;
-    credit.textContent = next.credit;
-    source.href = next.source;
+    slider.max = String(dataset.initialFrame);
+    slider.valueAsNumber = dataset.initialFrame;
+    description.textContent = dataset.description;
+    credit.textContent = dataset.credit;
+    source.href = dataset.source;
+    showHour();
     setStatus('loading');
-    hideTooltip();
-    deck.setProps({ layers: [] });
-    map.jumpTo({ center: next.center, zoom: next.zoom, ...MAP_ANGLE });
-
-    try {
-      const volumeReader = await next.open(signal);
-
-      signal.throwIfAborted();
-      frames = new FrameCache(volumeReader);
-      const lastIndex = frames.frameCount - 1;
-      slider.max = String(lastIndex);
-      selectHour(Math.min(next.initialFrame, lastIndex));
-    } catch (error) {
-      if (!request.signal.aborted && !lifetime.signal.aborted) {
-        reportError(error);
-      }
-    }
+    map.jumpTo({ center: dataset.center, zoom: dataset.zoom, ...MAP_ANGLE });
+    redraw();
   }
 
   /** Updates the visible and accessible label for the selected hour. */
@@ -346,149 +304,89 @@ async function start(): Promise<void> {
   function selectHour(index: number): void {
     slider.value = String(index);
     showHour();
-    void loadHour(index);
+    redraw();
   }
 
-  /** Waits for the current frame to finish loading before advancing. */
+  /** Advances only after the layer has loaded the current frame and its playback buffer. */
   function scheduleNextHour(): void {
     window.clearTimeout(playbackTimer);
-
-    if (!playing || !frames || frameRequest || startingPlayback) {
-      return;
-    }
-
-    const index = (slider.valueAsNumber + 1) % frames.frameCount;
-
-    playbackTimer = window.setTimeout(
-      () => selectHour(index),
-      PLAYBACK_DELAY_MS / Number(speed.value),
-    );
-  }
-
-  /**
-   * Reads ahead in playback order, then fills the rest of the timeline one frame at a time.
-   * @param cache - Frame cache for the dataset playing at the time of the click.
-   */
-  async function bufferPlayback(cache: FrameCache): Promise<void> {
-    const request = new AbortController();
-    const start = slider.valueAsNumber;
-    const count = Math.min(PLAYBACK_BUFFER_FRAMES, cache.frameCount - 1);
-    bufferRequest = request;
-    startingPlayback = Array.from({ length: count }, (_, index) =>
-      cache.has((start + index + 1) % cache.frameCount),
-    ).includes(false);
-
-    if (startingPlayback) {
-      setStatus('buffering');
-    } else {
-      scheduleNextHour();
-    }
-
-    try {
-      for (let offset = 1; offset <= cache.frameCount; offset++) {
-        const index = (start + offset) % cache.frameCount;
-        const signal = requestSignal(request);
-        await cache.read(index, signal);
-
-        signal.throwIfAborted();
-
-        if (startingPlayback && offset === count) {
-          startingPlayback = false;
-          setStatus('ready');
-          scheduleNextHour();
-        }
-      }
-    } catch (error) {
-      if (startingPlayback && !request.signal.aborted && !lifetime.signal.aborted) {
-        setPlaying(false);
-        reportError(error);
-      }
-    } finally {
-      if (bufferRequest === request) {
-        bufferRequest = undefined;
-      }
+    if (playing && frameCount > 1 && !loading) {
+      playbackTimer = window.setTimeout(
+        () => selectHour((slider.valueAsNumber + 1) % frameCount),
+        PLAYBACK_DELAY_MS / Number(speed.value),
+      );
     }
   }
 
-  /**
-   * Draws the frame with the current render settings.
-   * @param volume - Grid values already placed in deck.gl's map coordinates.
-   */
-  function drawFrame(volume: VoxelData): void {
+  /** Applies the selected source, time and render settings to the adapter layer. */
+  function redraw(): void {
+    const selected = dataset;
     deck.setProps({
       layers: [
-        new VoxelLayer({
-          id: dataset.id,
-          volume,
+        new ZarrVoxelLayer({
+          id: selected.id,
+          source: selected.volumeSource,
+          ...(selected.sourceOptions && { sourceOptions: selected.sourceOptions }),
+          frameIndex: slider.valueAsNumber,
+          preload: playing,
+          maxCacheBytes: FRAME_CACHE_BYTES,
+          requestTimeout: REQUEST_TIMEOUT_MS,
           modelMatrix,
           renderMode: modePicker.value === 'isosurface' ? 'isosurface' : 'volume',
           isovalue: isovalue.valueAsNumber,
-          colorBy: dataset.colorBy,
-          valueRange: dataset.valueRange,
-          transferFunction: dataset.transferFunction,
-          opacityUnitDistance: Math.abs(volume.spacing?.[2] ?? 1),
+          colorBy: selected.colorBy,
+          valueRange: selected.valueRange,
+          transferFunction: selected.transferFunction,
+          opacityUnitDistance: Math.abs(frame?.spacing?.[2] ?? 1),
           density: density.valueAsNumber,
           showBounds: true,
+          onSourceLoad: (reader) => {
+            if (dataset !== selected) {
+              return;
+            }
+            frameCount = reader.frameCount;
+            slider.max = String(frameCount - 1);
+            if (slider.valueAsNumber >= frameCount) {
+              selectHour(frameCount - 1);
+            }
+          },
+          onVolumeLoad: (volume) => {
+            if (dataset !== selected) {
+              return;
+            }
+            frame = volume;
+            slider.disabled = false;
+            play.disabled = frameCount < 2;
+            redraw();
+          },
+          onLoadStateChange: (busy) => {
+            if (dataset !== selected) {
+              return;
+            }
+            loading = busy;
+            if (busy) {
+              loadError = undefined;
+            }
+            if (loadError) {
+              reportError(loadError);
+            } else {
+              setStatus(busy ? (frame ? 'buffering' : 'loading') : 'ready');
+            }
+            scheduleNextHour();
+          },
+          onError: (error) => {
+            if (dataset === selected) {
+              setPlaying(false);
+              loadError = error;
+              redraw();
+              reportError(error);
+            }
+            return true;
+          },
         }),
       ],
     });
     hideTooltip();
-  }
-
-  /**
-   * Fetches the selected hour and replaces the visible volume when it arrives.
-   * @param index - Zero-based time index in the active store.
-   */
-  async function loadHour(index: number): Promise<void> {
-    const cache = frames;
-
-    if (!cache) {
-      return;
-    }
-
-    frameRequest?.abort();
-    const request = new AbortController();
-    const signal = requestSignal(request);
-
-    frameRequest = request;
-    if (!startingPlayback) {
-      if (!frame) {
-        setStatus('loading');
-      } else {
-        setStatus(playing && !cache.has(index) ? 'buffering' : 'ready');
-      }
-    }
-
-    try {
-      const volume = await cache.read(index, signal);
-
-      signal.throwIfAborted();
-      drawFrame(volume);
-      frame = volume;
-      slider.disabled = false;
-      play.disabled = cache.frameCount < 2;
-
-      if (!startingPlayback) {
-        setStatus('ready');
-      }
-    } catch (error) {
-      if (!request.signal.aborted && !lifetime.signal.aborted) {
-        setPlaying(false);
-        reportError(error);
-      }
-    } finally {
-      if (frameRequest === request) {
-        frameRequest = undefined;
-        scheduleNextHour();
-      }
-    }
-  }
-
-  /** Applies changes to the render controls to the displayed frame. */
-  function redraw(): void {
-    if (frame) {
-      drawFrame(frame);
-    }
   }
 
   play.addEventListener(
@@ -496,15 +394,8 @@ async function start(): Promise<void> {
     () => {
       setPlaying(!playing);
 
-      if (!playing || !frames) {
-        return;
-      }
-
-      if (!bufferRequest && !frames.isComplete) {
-        void bufferPlayback(frames);
-      } else {
-        scheduleNextHour();
-      }
+      redraw();
+      scheduleNextHour();
     },
     listenerOptions,
   );
@@ -516,7 +407,7 @@ async function start(): Promise<void> {
     },
     listenerOptions,
   );
-  slider.addEventListener('change', () => void loadHour(slider.valueAsNumber), listenerOptions);
+  slider.addEventListener('change', redraw, listenerOptions);
   speed.addEventListener('change', scheduleNextHour, listenerOptions);
   modePicker.addEventListener(
     'change',
@@ -551,9 +442,9 @@ async function start(): Promise<void> {
     listenerOptions,
   );
 
-  datasetPicker.addEventListener('change', () => void loadSelectedDataset(), listenerOptions);
+  datasetPicker.addEventListener('change', loadSelectedDataset, listenerOptions);
 
-  await loadSelectedDataset();
+  loadSelectedDataset();
 }
 
 /**
@@ -574,4 +465,8 @@ function reportError(error: unknown): void {
   setStatus('ready', error instanceof Error ? error.message : String(error));
 }
 
-void start().catch(reportError);
+try {
+  start();
+} catch (error) {
+  reportError(error);
+}

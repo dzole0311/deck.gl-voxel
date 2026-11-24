@@ -108,6 +108,10 @@ importers:
       zarrita:
         specifier: 0.7.5
         version: 0.7.5
+    devDependencies:
+      '@deck.gl/core':
+        specifier: 9.3.12
+        version: 9.3.12
 
 packages:
 

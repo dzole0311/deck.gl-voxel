@@ -1,7 +1,4 @@
-import { openZarrVolume, type ZarrVolume } from 'deck.gl-voxel-zarr';
-
-/** Reads the dataset one 3D frame at a time. */
-export type VolumeReader = Pick<ZarrVolume, 'frameCount' | 'readFrame'>;
+import type { ZarrLayerSourceOptions, ZarrVoxelLayerProps } from 'deck.gl-voxel-zarr';
 
 /** Where to load the data and how to show it on the map. */
 interface Dataset {
@@ -15,8 +12,11 @@ interface Dataset {
   /** Publisher's catalog or metadata link. */
   readonly source: string;
 
-  /** Opens the remote dataset, with cancellation supplied by the caller. */
-  readonly open: (signal: AbortSignal) => Promise<VolumeReader>;
+  /** Store URL or a derived-field opener managed by ZarrVoxelLayer. */
+  readonly volumeSource: ZarrVoxelLayerProps['source'];
+
+  /** Field and geometry selection for a URL-backed Zarr source. */
+  readonly sourceOptions?: ZarrLayerSourceOptions;
 
   /** Initial map center as longitude and latitude in degrees. */
   readonly center: [number, number];
@@ -67,17 +67,16 @@ const MILTON_STEP_HOURS = 3;
 export const datasets: Record<'helene' | 'milton', Dataset> = {
   helene: {
     id: 'helene',
-    description: 'ERA5 cloud cover · September 2024',
+    description: 'ERA5 cloud cover - September 2024',
     credit: 'Contains modified Copernicus Climate Change Service information (2024).',
     source: `${HELENE_URL}/fraction_of_cloud_cover/zarr.json`,
-    open: (signal) =>
-      openZarrVolume(HELENE_URL, {
-        field: 'fraction_of_cloud_cover',
-        level: '2',
-        verticalDimension: 'height',
-        verticalCoordinates: 'height',
-        signal,
-      }),
+    volumeSource: HELENE_URL,
+    sourceOptions: {
+      field: 'fraction_of_cloud_cover',
+      level: '2',
+      verticalDimension: 'height',
+      verticalCoordinates: 'height',
+    },
     center: [-81, 31],
     zoom: 3.5,
     verticalExaggeration: 50,
@@ -96,10 +95,10 @@ export const datasets: Record<'helene' | 'milton', Dataset> = {
   },
   milton: {
     id: 'milton',
-    description: 'GFS wind speed · Run Oct 8, 12 UTC',
+    description: 'GFS wind speed - Run Oct 8, 12 UTC',
     credit: 'NOAA NWS NCEP GFS data via Dynamical.org (CC BY 4.0).',
     source: 'https://dynamical.org/catalog/noaa-gfs-forecast-virtual/',
-    open: async (signal) => {
+    volumeSource: async (signal) => {
       const { openGfsWind } = await import('./gfs-wind.js');
       return openGfsWind(MILTON_RUN, MILTON_STEP_HOURS, signal);
     },
