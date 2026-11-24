@@ -1,8 +1,12 @@
 import type { GribberishCodecConfiguration } from '@mattnucc/gribberish/zarr';
-import type { VoxelData } from 'deck.gl-voxel';
-import { projectGeographicVolume, type ZarrVolume } from 'deck.gl-voxel-zarr';
+import {
+  ChunkCache,
+  createChunkedVolume,
+  type ZarrSourceContext,
+  type ZarrVolume,
+} from 'deck.gl-voxel-zarr';
 import { IcechunkStore } from 'icechunk-js';
-import { get, open, registry, slice } from 'zarrita';
+import { type Chunk, get, open, registry, slice, type Array as ZarrArray } from 'zarrita';
 
 const COLLECTION = 'https://stac.dynamical.org/noaa-gfs-forecast-virtual/collection.json';
 const GROUP = 'height_above_mean_sea_level';
@@ -34,6 +38,7 @@ registry.set('gribberish', async () => {
  * @param firstTime - Time NOAA started this forecast run, in milliseconds since the Unix epoch.
  * @param stepHours - Hours between displayed frames.
  * @param signal - Cancels reads of the catalog, Icechunk store and coordinate arrays.
+ * @param context - Total decoded cache budget and concurrency limit supplied by the layer.
  * @returns A reader that builds a wind-speed grid in the browser for each requested frame.
  * @throws {Error} If the cloud store or requested coordinates cannot be opened.
  * @see {@link https://dynamical.org/catalog/noaa-gfs-forecast-virtual/}
@@ -42,6 +47,7 @@ export async function openGfsWind(
   firstTime: number,
   stepHours: number,
   signal: AbortSignal,
+  context: ZarrSourceContext,
 ): Promise<ZarrVolume> {
   const response = await fetch(COLLECTION, { signal });
 
@@ -105,74 +111,71 @@ export async function openGfsWind(
 
     return { lower: upper - 1, upper, weight: (target - lower) / (top - lower) };
   });
-  const firstHeight = heightPairs[0]?.lower ?? 0;
-  const endHeight = (heightPairs.at(-1)?.upper ?? 0) + 1;
-  return {
-    frameCount: FRAME_COUNT,
-    level: '.',
-    /**
-     * Loads both wind directions for one forecast hour and combines them into wind speed.
-     * @param index - Zero-based index in the displayed forecast times.
-     * @param frameSignal - Cancels the byte-range requests to NOAA's GRIB files.
-     * @returns Wind speed in m/s on a 3D grid placed on the map.
-     * @throws {Error} If the frame cannot be read or the index is outside the timeline.
-     */
-    async readFrame(index: number, frameSignal?: AbortSignal): Promise<VoxelData> {
-      frameSignal?.throwIfAborted();
-      const leadIndex = frameLeads[index];
-
-      if (leadIndex === undefined) {
-        throw new Error('GFS forecast frame is outside the available range.');
+  const componentCacheBytes = Math.floor(context.maxCacheBytes / 2);
+  const components = new ChunkCache<string, Chunk<'float64'>>({
+    maxBytes: componentCacheBytes,
+    maxRequests: context.maxRequests,
+    load: (key, signal) => {
+      const [component, leadIndex, heightIndex] = key.split(':').map(Number);
+      if (leadIndex === undefined || heightIndex === undefined) {
+        throw new Error('GFS component key is missing its forecast or height.');
       }
+      return readComponent(component === 0 ? u : v, leadIndex, heightIndex, signal);
+    },
+    byteLength: (chunk) => chunk.data.buffer.byteLength,
+  });
 
-      const selection = [
-        run,
-        leadIndex,
-        slice(latStart, latEnd),
-        slice(lonStart, lonEnd),
-        slice(firstHeight, endHeight),
-      ];
-      const options = frameSignal ? { signal: frameSignal } : undefined;
-      const [east, north] = await Promise.all([
-        get(u, selection, options),
-        get(v, selection, options),
+  function readComponent(
+    array: ZarrArray<'float64'>,
+    leadIndex: number,
+    heightIndex: number,
+    signal: AbortSignal,
+  ) {
+    return get(
+      array,
+      [run, leadIndex, slice(latStart, latEnd), slice(lonStart, lonEnd), heightIndex],
+      { signal },
+    );
+  }
+
+  return createChunkedVolume({
+    geometry: {
+      dimensions: [width, rows, HEIGHT_COUNT],
+      origin: [WEST - dx / 2, NORTH - dy / 2, HEIGHT_STEP_METERS / 2],
+      spacing: [dx, dy, HEIGHT_STEP_METERS],
+    },
+    geographic: true,
+    maxCacheBytes: context.maxCacheBytes - componentCacheBytes,
+    maxRequests: context.maxRequests,
+    frameCount: FRAME_COUNT,
+    // Each native GRIB chunk covers the full horizontal grid at one height.
+    chunkDimensions: [width, rows, 1],
+    dispose: () => components.clear(),
+    async readChunk(index, [, , z], signal) {
+      const leadIndex = frameLeads[index];
+      const pair = heightPairs[z];
+      if (leadIndex === undefined || !pair) {
+        throw new Error('GFS forecast frame or height is outside the available range.');
+      }
+      const { lower, upper, weight } = pair;
+      const [eastLower, eastUpper, northLower, northUpper] = await Promise.all([
+        components.read(`0:${leadIndex}:${lower}`, signal),
+        components.read(`0:${leadIndex}:${upper}`, signal),
+        components.read(`1:${leadIndex}:${lower}`, signal),
+        components.read(`1:${leadIndex}:${upper}`, signal),
       ]);
-      frameSignal?.throwIfAborted();
-
-      const values = new Float32Array(width * rows * HEIGHT_COUNT);
-
-      for (const [z, { lower, upper, weight }] of heightPairs.entries()) {
-        for (let y = 0; y < rows; y++) {
-          for (let x = 0; x < width; x++) {
-            const eastward = interpolateWind(
-              east,
-              x,
-              y,
-              lower - firstHeight,
-              upper - firstHeight,
-              weight,
-            );
-            const northward = interpolateWind(
-              north,
-              x,
-              y,
-              lower - firstHeight,
-              upper - firstHeight,
-              weight,
-            );
-            values[x + width * (y + rows * z)] = Math.hypot(eastward, northward);
-          }
+      signal.throwIfAborted();
+      const values = new Float32Array(width * rows);
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < width; x++) {
+          const eastward = interpolateWind(eastLower, eastUpper, x, y, weight);
+          const northward = interpolateWind(northLower, northUpper, x, y, weight);
+          values[x + width * y] = Math.hypot(eastward, northward);
         }
       }
-
-      return projectGeographicVolume(
-        values,
-        [width, rows, HEIGHT_COUNT],
-        [WEST - dx / 2, NORTH - dy / 2, HEIGHT_STEP_METERS / 2],
-        [dx, dy, HEIGHT_STEP_METERS],
-      );
+      return values;
     },
-  };
+  });
 }
 
 /**
@@ -246,28 +249,15 @@ function coordinateIndex(values: readonly number[], value: number): number {
   return index;
 }
 
-/**
- * Estimates one wind component at a height between two levels in the source data.
- * @param chunk - Wind values already read for the chosen latitudes, longitudes and heights.
- * @param x - Longitude index in the selected window.
- * @param y - Latitude index in the selected window.
- * @param lower - Lower sampled height index.
- * @param upper - Upper sampled height index.
- * @param weight - How far up the target height is between the two levels, from 0 to 1.
- * @returns Wind component in m/s, or NaN if either source value is missing.
- */
+/** Interpolates a wind component between two cached native height slices; missing samples remain NaN. */
 function interpolateWind(
-  chunk: { data: Float64Array; stride: readonly number[] },
+  lower: { data: Float64Array; stride: readonly number[] },
+  upper: { data: Float64Array; stride: readonly number[] },
   x: number,
   y: number,
-  lower: number,
-  upper: number,
   weight: number,
 ): number {
-  const [row = 0, column = 0, vertical = 0] = chunk.stride;
-  const offset = y * row + x * column;
-  const a = chunk.data[offset + lower * vertical] ?? NaN;
-  const b = chunk.data[offset + upper * vertical] ?? NaN;
-
+  const a = lower.data[y * (lower.stride[0] ?? 0) + x * (lower.stride[1] ?? 0)] ?? NaN;
+  const b = upper.data[y * (upper.stride[0] ?? 0) + x * (upper.stride[1] ?? 0)] ?? NaN;
   return a + (b - a) * weight;
 }

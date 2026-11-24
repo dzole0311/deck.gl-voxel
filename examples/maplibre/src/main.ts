@@ -135,6 +135,7 @@ function start(): void {
   let loading = true;
   let loadError: Error | undefined;
   let frame: VoxelData | undefined;
+  let completeFrame: VoxelData | undefined;
   let playing = false;
   let playbackTimer: number | undefined;
 
@@ -263,6 +264,7 @@ function start(): void {
     dataset = datasetPicker.value === 'milton' ? datasets.milton : datasets.helene;
     setPlaying(false);
     frame = undefined;
+    completeFrame = undefined;
     frameCount = 0;
     loading = true;
     loadError = undefined;
@@ -350,11 +352,18 @@ function start(): void {
               selectHour(frameCount - 1);
             }
           },
+          onVolumeProgress: (volume) => {
+            if (dataset === selected) {
+              frame = volume;
+              redraw();
+            }
+          },
           onVolumeLoad: (volume) => {
             if (dataset !== selected) {
               return;
             }
             frame = volume;
+            completeFrame = volume;
             slider.disabled = false;
             play.disabled = frameCount < 2;
             redraw();
@@ -377,6 +386,7 @@ function start(): void {
           onError: (error) => {
             if (dataset === selected) {
               setPlaying(false);
+              frame = completeFrame ?? frame;
               loadError = error;
               redraw();
               reportError(error);
