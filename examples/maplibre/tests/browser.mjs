@@ -227,6 +227,7 @@ try {
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(150);
+  await idle();
   const narrow = await page.locator('#chunk-inspector').boundingBox();
   assert.ok(narrow && narrow.x >= 0 && narrow.x + narrow.width <= 390);
   assert.equal((await page.locator('#status').textContent()).trim(), '');

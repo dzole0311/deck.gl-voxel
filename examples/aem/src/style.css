@@ -1,0 +1,127 @@
+@import 'maplibre-gl/dist/maplibre-gl.css';
+@import '@deck.gl-voxel/example-ui/styles.css';
+@source '../../ui/src';
+
+:root {
+  font-family: Arial, Helvetica, sans-serif;
+  color: #17212c;
+  background: #edf0f2;
+  font-size: 16px;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+}
+#map,
+#volume {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#map {
+  opacity: 0.28;
+  pointer-events: none;
+}
+#volume {
+  outline: none;
+}
+.controls {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  width: 258px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #b7c0c7;
+  font-size: 14px;
+  z-index: 20;
+}
+.controls h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.2;
+}
+.subtitle {
+  margin: -4px 0 4px;
+  color: #53606c;
+}
+.categories {
+  border-block: 1px solid #dbe0e4;
+  padding: 12px 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.categories legend {
+  font-weight: 500;
+  padding-top: 8px;
+}
+.swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #88939d;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.help,
+.metadata {
+  font-size: 12px;
+  color: #53606c;
+  line-height: 1.5;
+}
+.status {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.error {
+  font-size: 13px;
+  color: #a52724;
+  line-height: 1.4;
+}
+.controls a {
+  font-size: 12px;
+  text-decoration: underline;
+  color: #325a78;
+}
+.controls input[type='range'] {
+  width: 100%;
+  accent-color: #305677;
+}
+.tooltip {
+  position: fixed;
+  z-index: 40;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid #788796;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.55;
+  pointer-events: none;
+}
+.inspector-loading {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  background: #fff;
+  padding: 12px;
+}
+@media (max-width: 640px) {
+  .controls {
+    top: 8px;
+    left: 8px;
+    width: 220px;
+    max-height: 45dvh;
+    padding: 12px;
+  }
+}

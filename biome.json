@@ -25,7 +25,11 @@
   },
   "overrides": [
     {
-      "includes": ["examples/ui/src/styles.css", "examples/maplibre/src/style.css"],
+      "includes": [
+        "examples/ui/src/styles.css",
+        "examples/maplibre/src/style.css",
+        "examples/aem/src/style.css"
+      ],
       "css": {
         "parser": {
           "tailwindDirectives": true
