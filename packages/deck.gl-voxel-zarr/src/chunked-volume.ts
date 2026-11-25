@@ -105,17 +105,12 @@ export function createChunkedVolume(options: ChunkedVolumeOptions): ZarrVolume {
     geometry,
     frameCount: options.frameCount,
     level: '.',
-    getDebugState: () => view.getDebugState(),
     readView: (index, query) => view.read(index, query),
     readFrame: (index, signal = new AbortController().signal) =>
-      view.read(
-        index,
-        {
-          volumeToClip: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1],
-          signal,
-        },
-        'frame',
-      ),
+      view.read(index, {
+        volumeToClip: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1],
+        signal,
+      }),
     dispose() {
       if (!disposed) {
         disposed = true;
