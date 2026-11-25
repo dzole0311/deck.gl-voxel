@@ -1,6 +1,6 @@
 # deck.gl-voxel
 
-Experimental deck.gl layer for visualizing volumetric data with WebGPU. It supports volume rendering and isosurfaces.
+Experimental deck.gl layer for visualizing volumetric data with WebGPU. It supports translucent volumes, isosurfaces and opaque geological cells.
 
 Earlier example using `SimpleMeshLayer` and `CubeGeometry` in [deck.gl-voxel-prototype](https://github.com/dzole0311/deck.gl-voxel-prototype).
 
@@ -16,6 +16,8 @@ pnpm dev:maplibre
 ```
 
 Open the [local example](http://127.0.0.1:5175/).
+
+The [AEM GeoZarr example](examples/aem/README.md) streams California DWR survey grids, including sparse coverage, automatic refinement and underground exploration. Run `pnpm dev:aem`; Vite prints the available local URL.
 
 ## Packages
 

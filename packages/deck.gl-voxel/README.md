@@ -45,3 +45,42 @@ Set `showBounds: true` to draw the full grid’s bounding box. The rear edges ar
 and appear behind the voxels. The outline is off by default.
 
 See the [layer props](src/types.ts) and the [MapLibre example](../../examples/maplibre/README.md).
+
+## Opaque cells
+
+`CellLayer` rasterizes opaque cells using an immutable `CellMesh` from `prepareCellMesh`. It merges adjacent vertical samples with the same display bin, preserves native gaps, writes depth and closes near-plane intersections. This is separate from translucent `VoxelLayer` rendering.
+
+`CellGrid` uses X-fastest arrays. XY origin and spacing are Cartesian common coordinates; Z and `ground` are physical meters. `elevationScales` converts each row's physical meters to common units (use one for an ordinary Cartesian meter scene). `validity` describes native cells even when `values` comes from a coarser XY overview. See [the grid contracts](src/cell-grid.ts).
+
+```ts
+import { CellLayer, prepareCellMesh } from 'deck.gl-voxel';
+
+const mesh = await prepareCellMesh(
+  {
+    dimensions: [2, 1, 2],
+    origin: [0, 0, 980],
+    spacing: [1, 1, 5],
+    values: new Float32Array([0.1, 0.8, 0.2, 0.9]),
+    valueDimensions: [2, 1, 2],
+    valueScale: 1,
+    validity: new Uint8Array([1, 0, 1, 1]),
+    ground: new Float32Array([1000, 1005]),
+    elevationScales: new Float32Array([1]),
+  },
+  2,
+  [0, 1],
+);
+
+const layer = new CellLayer({
+  id: 'opaque-cells',
+  mesh,
+  palette: new Uint8Array([50, 136, 189, 255, 213, 62, 79, 255]),
+  exaggeration: 20,
+});
+```
+
+The display transform is `ground + exaggeration * (physical - ground)`. `displayElevation`, `physicalElevation`, `getCellMeshBounds`, `pickCellMesh` and `pickCellCollection` share this convention. Supply camera rays in common coordinates. Collection picking skips irrelevant chunk bounds before checking cuboids. Use `visibleBins` to hide categories without rebuilding geometry. Palette alpha does not make these opaque cells translucent.
+
+`clipBounds` keeps XY common-coordinate bounds and physical meter Z bounds. The exposed cuboid faces close automatically. Pass identical bounds to the picking helper when clipping. There is no oblique-plane slicing or arbitrary model-transform support in this renderer. Geometry is axis-aligned in common coordinates; GPU picking is disabled in favor of the reusable CPU helpers.
+
+Callers own input arrays and meshes. Pass a new mesh or palette object to upload changed data. Each layer owns and releases its buffers and model. Camera movement preserves these resources. See the [AEM example](../../examples/aem/README.md) for projected data, source selection, an inspector and verification.
