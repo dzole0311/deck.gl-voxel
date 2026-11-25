@@ -32,15 +32,14 @@ registry.set('gribberish', async () => {
 });
 
 /**
- * Opens the eastward and northward wind fields for one GFS forecast over the contiguous United States.
- * Dynamical's catalog links to an Icechunk index. For this dataset the index points
- * to the byte ranges of NOAA's original GRIB weather files, which the browser reads directly.
- * @param firstTime - Time NOAA started this forecast run, in milliseconds since the Unix epoch.
- * @param stepHours - Hours between displayed frames.
- * @param signal - Cancels reads of the catalog, Icechunk store and coordinate arrays.
- * @param context - Total decoded cache budget and concurrency limit supplied by the layer.
- * @returns A reader that builds a wind-speed grid in the browser for each requested frame.
- * @throws {Error} If the cloud store or requested coordinates cannot be opened.
+ * Opens one GFS wind forecast over the Gulf and Florida
+ * Dynamical's Icechunk index points to NOAA GRIB files that the browser reads directly
+ * @param firstTime - Forecast start time in milliseconds since the Unix epoch
+ * @param stepHours - Hours between displayed frames
+ * @param signal - Cancels catalog, store and coordinate reads
+ * @param context - Cache byte limit and read concurrency supplied by the layer
+ * @returns A reader that computes wind speed from the two wind components
+ * @throws {Error} If the store cannot be opened or a requested coordinate is missing
  * @see {@link https://dynamical.org/catalog/noaa-gfs-forecast-virtual/}
  */
 export async function openGfsWind(
@@ -116,11 +115,17 @@ export async function openGfsWind(
     maxBytes: componentCacheBytes,
     maxRequests: context.maxRequests,
     load: (key, signal) => {
-      const [component, leadIndex, heightIndex] = key.split(':').map(Number);
-      if (leadIndex === undefined || heightIndex === undefined) {
+      const [component, leadText, heightText] = key.split(':');
+      const leadIndex = Number(leadText);
+      const heightIndex = Number(heightText);
+      if (
+        !Number.isSafeInteger(leadIndex) ||
+        !Number.isSafeInteger(heightIndex) ||
+        (component !== 'u' && component !== 'v')
+      ) {
         throw new Error('GFS component key is missing its forecast or height.');
       }
-      return readComponent(component === 0 ? u : v, leadIndex, heightIndex, signal);
+      return readComponent(component === 'u' ? u : v, leadIndex, heightIndex, signal);
     },
     byteLength: (chunk) => chunk.data.buffer.byteLength,
   });
@@ -148,7 +153,7 @@ export async function openGfsWind(
     maxCacheBytes: context.maxCacheBytes - componentCacheBytes,
     maxRequests: context.maxRequests,
     frameCount: FRAME_COUNT,
-    // Each native GRIB chunk covers the full horizontal grid at one height.
+    // Each GRIB chunk covers the whole horizontal grid at one height
     chunkDimensions: [width, rows, 1],
     dispose: () => components.clear(),
     async readChunk(index, [, , z], signal) {
@@ -159,10 +164,10 @@ export async function openGfsWind(
       }
       const { lower, upper, weight } = pair;
       const [eastLower, eastUpper, northLower, northUpper] = await Promise.all([
-        components.read(`0:${leadIndex}:${lower}`, signal),
-        components.read(`0:${leadIndex}:${upper}`, signal),
-        components.read(`1:${leadIndex}:${lower}`, signal),
-        components.read(`1:${leadIndex}:${upper}`, signal),
+        components.read(`u:${leadIndex}:${lower}`, signal),
+        components.read(`u:${leadIndex}:${upper}`, signal),
+        components.read(`v:${leadIndex}:${lower}`, signal),
+        components.read(`v:${leadIndex}:${upper}`, signal),
       ]);
       signal.throwIfAborted();
       const values = new Float32Array(width * rows);
@@ -249,7 +254,7 @@ function coordinateIndex(values: readonly number[], value: number): number {
   return index;
 }
 
-/** Interpolates a wind component between two cached native height slices; missing samples remain NaN. */
+/** Blends two cached height slices for one wind component and keeps missing values as NaN */
 function interpolateWind(
   lower: { data: Float64Array; stride: readonly number[] },
   upper: { data: Float64Array; stride: readonly number[] },

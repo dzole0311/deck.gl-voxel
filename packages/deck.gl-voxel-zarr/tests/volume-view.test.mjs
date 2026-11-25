@@ -2,11 +2,47 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { openZarrVolume } from '../dist/index.js';
-import { volumeBoxVisible } from '../dist/volume-view.js';
+import { VolumeView, volumeBoxVisible } from '../dist/volume-view.js';
 
 const fullView = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
 const leftView = [8, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
 const rightView = [...leftView.slice(0, 12), -7, -1, -1, 1];
+
+test('chunks sharing a larger backing buffer stay within the decoded cache budget', async () => {
+  const backing = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  let reads = 0;
+  const view = new VolumeView({
+    array: {
+      chunks: [1, 1, 1, 2],
+      async getChunk([, , , x]) {
+        reads++;
+        return {
+          data: backing.subarray(x * 2, x * 2 + 2),
+          shape: [1, 1, 1, 2],
+          stride: [2, 2, 2, 1],
+        };
+      },
+    },
+    axes: ['time', 'z', 'y', 'x'],
+    dimensions: [8, 1, 1],
+    geometry: { dimensions: [8, 1, 1] },
+    frameCount: 1,
+    selection: {},
+    grid: undefined,
+    noDataValue: undefined,
+    maxCacheBytes: backing.byteLength,
+    maxRequests: 2,
+  });
+  const signal = new AbortController().signal;
+  const initial = await view.read(0, { volumeToClip: fullView, signal });
+  assert.deepEqual([...initial.values], [...backing]);
+  assert.equal(reads, 4);
+  await view.read(0, { volumeToClip: leftView, signal });
+  const repeated = await view.read(0, { volumeToClip: fullView, signal });
+  assert.deepEqual([...repeated.values], [...backing]);
+  assert.equal(reads, 4, 'shared backing buffers must not force cached chunks out');
+  view.dispose();
+});
 
 async function until(predicate) {
   for (let attempt = 0; attempt < 200; attempt++) {

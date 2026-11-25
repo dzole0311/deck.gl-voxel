@@ -1,43 +1,69 @@
 import type { Vector3, VoxelGeometry } from 'deck.gl-voxel';
 import { createProjectedGrid } from './projected-grid.js';
+import { DEFAULT_MAX_CELLS } from './volume-limits.js';
 import { VolumeView } from './volume-view.js';
 import type { ZarrVolume } from './zarr-volume.js';
 
-/** Derived scalar chunks that use the same view selection, caching and projection as Zarr fields. */
+/** Custom scalar chunks with the same camera selection, cache and map projection as Zarr fields */
 export interface ChunkedVolumeOptions {
   readonly geometry: VoxelGeometry;
   readonly frameCount: number;
-  /** XYZ cell counts per chunk, including padding at grid edges. */
+  /**
+   * Cell counts per chunk in XYZ order
+   * Edge chunks must return the same number of values as interior chunks
+   * Pad cells beyond the grid bounds, which the reader ignores when copying into the grid
+   */
   readonly chunkDimensions: Vector3;
-  /** Interpret XY origin/spacing as north-up longitude/latitude degrees and Z as meters. */
+  /**
+   * Treat XY origin and spacing as longitude and latitude degrees, with rows running north to south
+   * Z uses meters and increases upward
+   */
   readonly geographic?: boolean;
   /**
-   * Decoded byte budget, excluding displayed grids and in-flight work.
+   * Maximum cell count for both the full grid and each padded chunk
+   * Each Float32 grid uses four bytes per cell, and progress results allocate new grids
+   * Geographic reads also use one readiness byte per source cell
+   * Cached chunks and previous results use additional memory outside this limit
+   * @default 2000000
+   */
+  readonly maxCells?: number;
+  /**
+   * Byte limit for cached decoded chunks
+   * Displayed grids and pending work are outside this limit
    * @default 67108864
    */
   readonly maxCacheBytes?: number;
   /**
-   * Maximum concurrent calls to readChunk.
+   * Maximum number of readChunk calls running at once
    * @default 6
    */
   readonly maxRequests?: number;
-  /** Returns one immutable, X-fastest float32 chunk. Coordinates are zero-based XYZ chunk indices. */
+  /**
+   * Returns one padded chunk with X changing fastest, followed by Y and then Z
+   * Coordinates identify chunks rather than cells, so [1, 0, 0] is the second chunk along X
+   * The reader may cache this array, so do not change its values after returning it
+   */
   readonly readChunk: (
     index: number,
     coordinates: Vector3,
     signal: AbortSignal,
   ) => Promise<Float32Array>;
-  /** Releases resources owned by the source after this reader cancels its pending reads. */
+  /** Releases source resources after this reader cancels its pending reads */
   readonly dispose?: () => void;
 }
 
 /**
- * Wraps derived chunks in a reader with progressive views and a shared decoded cache.
- * The caller transfers disposal ownership to the reader; disposing it also calls options.dispose.
- * @throws If dimensions, geometry, frame count or cache limits are invalid. Grids are limited to two million cells.
+ * Creates a reader that loads custom chunks for the current view
+ * Call dispose when the reader is no longer needed to cancel reads and run options.dispose
+ * maxCells limits both the full grid and each padded chunk before any reads start
+ * @throws If geometry, frame count or cache limits are invalid, or either cell count exceeds the cap
  */
 export function createChunkedVolume(options: ChunkedVolumeOptions): ZarrVolume {
   const { dimensions, origin = [0, 0, 0], spacing = [1, 1, 1] } = options.geometry;
+  const maxCells = options.maxCells ?? DEFAULT_MAX_CELLS;
+  if (!Number.isSafeInteger(maxCells) || maxCells < 1) {
+    throw new Error('maxCells must be a positive safe integer.');
+  }
   const [cx, cy, cz] = options.chunkDimensions;
   const cells = dimensions.reduce((size, count) => size * count, 1);
   const chunkCells = cx * cy * cz;
@@ -48,16 +74,16 @@ export function createChunkedVolume(options: ChunkedVolumeOptions): ZarrVolume {
       (size) => Number.isSafeInteger(size) && size > 0,
     ) ||
     !Number.isSafeInteger(cells) ||
-    cells > 2_000_000 ||
+    cells > maxCells ||
     !Number.isSafeInteger(chunkCells) ||
-    chunkCells > 2_000_000 ||
+    chunkCells > maxCells ||
     origin.length !== 3 ||
     spacing.length !== 3 ||
     !origin.every(Number.isFinite) ||
     !spacing.every((value) => Number.isFinite(value) && value !== 0)
   ) {
     throw new Error(
-      'Chunked volume requires valid geometry, positive dimensions and at most two million cells.',
+      `Chunked volume requires valid geometry, positive dimensions and grid and chunk cell counts no greater than maxCells (${maxCells}).`,
     );
   }
   const grid = options.geographic

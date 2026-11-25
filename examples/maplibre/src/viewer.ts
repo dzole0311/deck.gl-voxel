@@ -269,7 +269,7 @@ export class ExampleViewer implements ChunkInspectorView {
           },
           onError: (error) => {
             if (active()) {
-              this.frame = this.completeFrame ?? this.frame;
+              this.frame = this.completeFrame;
               this.callbacks.onError(error);
               this.render();
             }

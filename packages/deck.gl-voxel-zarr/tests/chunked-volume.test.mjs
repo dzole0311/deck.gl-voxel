@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
-import { createChunkedVolume, projectGeographicVolume } from '../dist/index.js';
+import { createChunkedVolume, DEFAULT_MAX_CELLS, projectGeographicVolume } from '../dist/index.js';
 import { BACKGROUND_PRIORITY } from '../dist/request-priority.js';
 
 const fullView = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
@@ -86,7 +86,7 @@ test('derived chunk shape errors reject the read and invalid geometry fails befo
   reader.dispose();
   assert.throws(
     () => createChunkedVolume({ ...source, geometry: { dimensions: [2_000_001, 1, 1] } }),
-    /two million/,
+    /maxCells/,
   );
   assert.throws(() => createChunkedVolume({ ...source, frameCount: 0 }), /positive dimensions/);
 });
@@ -123,4 +123,36 @@ test('frame and preload reads preserve camera diagnostics; an assembled view sur
     debug.chunks.filter((chunk) => chunk.selected).every((chunk) => chunk.status === 'ready'),
   );
   reader.dispose();
+});
+
+test('custom cell limits validate grids and padded chunks before reading', async () => {
+  let reads = 0;
+  const source = {
+    geometry: { dimensions: [4, 1, 1] },
+    chunkDimensions: [2, 1, 1],
+    frameCount: 1,
+    readChunk: async () => {
+      reads++;
+      return new Float32Array([1, 2]);
+    },
+  };
+  for (const maxCells of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => createChunkedVolume({ ...source, maxCells }), /positive safe integer/);
+  }
+  assert.throws(() => createChunkedVolume({ ...source, maxCells: 3 }), /maxCells/);
+  assert.throws(
+    () => createChunkedVolume({ ...source, chunkDimensions: [5, 1, 1], maxCells: 4 }),
+    /maxCells/,
+  );
+  assert.equal(reads, 0);
+  const reader = createChunkedVolume({ ...source, maxCells: 4 });
+  assert.deepEqual((await reader.readFrame(0)).values, new Float32Array([1, 2, 1, 2]));
+  reader.dispose();
+  const large = createChunkedVolume({
+    ...source,
+    geometry: { dimensions: [DEFAULT_MAX_CELLS + 1, 1, 1] },
+    chunkDimensions: [DEFAULT_MAX_CELLS + 1, 1, 1],
+    maxCells: DEFAULT_MAX_CELLS + 1,
+  });
+  large.dispose();
 });
