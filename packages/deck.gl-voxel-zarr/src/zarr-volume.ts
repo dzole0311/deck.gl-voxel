@@ -1,6 +1,7 @@
 import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import { type Chunk, FetchStore, get, open, root, withRangeCoalescing } from 'zarrita';
 
+import type { ZarrDebugState } from './debug.js';
 import { hasGeoZarrMetadata, readGeoZarrField, readSpatialAttributes } from './geo-zarr-volume.js';
 import { createProjectedGrid, projectFrame } from './projected-grid.js';
 import { DEFAULT_MAX_CELLS } from './volume-limits.js';
@@ -111,6 +112,9 @@ export interface ZarrVolume {
 
   /** Optional camera read that returns a grid with NaN outside the selected chunks */
   readView?(index: number, options: ZarrViewOptions): Promise<VoxelData>;
+
+  /** Inspects the latest foreground view. Reading diagnostics never triggers I/O. */
+  getDebugState?(): ZarrDebugState | undefined;
 
   /** Clears this reader's cache and cancels pending chunk reads */
   dispose?(): void;
@@ -228,6 +232,7 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
 
   return {
     geometry,
+    getDebugState: () => view.getDebugState(),
     readView: (index, options) => view.read(index, options),
     dispose: () => view.dispose(),
     frameCount,

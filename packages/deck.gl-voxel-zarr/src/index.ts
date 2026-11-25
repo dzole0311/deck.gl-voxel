@@ -1,5 +1,6 @@
 export { ChunkCache, type ChunkCacheOptions } from './chunk-cache.js';
 export { type ChunkedVolumeOptions, createChunkedVolume } from './chunked-volume.js';
+export type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
 export { projectGeographicVolume } from './projected-grid.js';
 export { DEFAULT_MAX_CELLS } from './volume-limits.js';
 export type { ZarrViewOptions } from './volume-view.js';

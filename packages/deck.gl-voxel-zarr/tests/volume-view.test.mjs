@@ -182,6 +182,10 @@ for (const [version, geo] of [
       ...store.options,
       maxRequests: 2,
     });
+    if (version === 2) {
+      assert.equal(reader.getDebugState(), undefined);
+    }
+    assert.equal(store.requests.length, 0, 'reading diagnostics does not fetch chunks');
     const signal = new AbortController().signal;
     const partials = [];
     let complete = false;
@@ -196,6 +200,12 @@ for (const [version, geo] of [
         return volume;
       });
     await until(() => store.pending.length === 2);
+    const debug = reader.getDebugState();
+    assert.equal(debug.chunks.length, 16);
+    assert.equal(debug.chunks.filter((chunk) => chunk.selected).length, 8);
+    assert.equal(debug.chunks.filter((chunk) => chunk.status === 'loading').length, 2);
+    assert.equal(debug.chunks.filter((chunk) => chunk.status === 'queued').length, 6);
+    assert.equal(debug.chunks.filter((chunk) => chunk.status === 'outside').length, 8);
     assert.ok(
       store.requests.every((coords) => coords[store.xAxis] === 0),
       'center chunks run first',
@@ -239,6 +249,11 @@ for (const [version, geo] of [
     assert.equal(store.requests.length, 16);
     await reader.readView(0, { volumeToClip: leftView, signal });
     assert.equal(store.requests.length, 16, 'returning to a previous view uses the decoded cache');
+    assert.equal(
+      reader.getDebugState().chunks.filter((chunk) => chunk.status === 'cached').length,
+      8,
+    );
+    assert.ok(reader.getDebugState().cacheBytes > 0);
     const whole = await reader.readView(0, { volumeToClip: fullView, signal });
     assert.ok(whole.values.every(Number.isFinite));
     complete = false;

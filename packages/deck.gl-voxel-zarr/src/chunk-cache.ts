@@ -59,6 +59,20 @@ export class ChunkCache<K, T> {
     return this.values.has(key);
   }
 
+  /** Retained decoded bytes, excluding pending loads. */
+  get byteLength(): number {
+    return this.bytes;
+  }
+
+  /** Observes an entry without affecting its LRU position or starting a read. */
+  getStatus(key: K): 'cached' | 'loading' | 'queued' | 'missing' {
+    if (this.values.has(key)) {
+      return 'cached';
+    }
+    const pending = this.pending.get(key);
+    return pending ? (pending.started ? 'loading' : 'queued') : 'missing';
+  }
+
   /**
    * Lower priority numbers run first
    * A caller can move a shared queued read ahead by requesting a lower number

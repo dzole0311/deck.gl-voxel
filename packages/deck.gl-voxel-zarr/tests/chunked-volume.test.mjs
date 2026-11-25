@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { createChunkedVolume, DEFAULT_MAX_CELLS, projectGeographicVolume } from '../dist/index.js';
+import { BACKGROUND_PRIORITY } from '../dist/request-priority.js';
 
 const fullView = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
 
@@ -88,6 +89,40 @@ test('derived chunk shape errors reject the read and invalid geometry fails befo
     /maxCells/,
   );
   assert.throws(() => createChunkedVolume({ ...source, frameCount: 0 }), /positive dimensions/);
+});
+
+test('frame and preload reads preserve camera diagnostics; an assembled view survives decoded-cache eviction', async () => {
+  let reads = 0;
+  const reader = createChunkedVolume({
+    geometry: { dimensions: [8, 1, 1] },
+    chunkDimensions: [2, 1, 1],
+    frameCount: 2,
+    maxCacheBytes: 1,
+    readChunk: async (frame) => {
+      reads++;
+      return new Float32Array(2).fill(frame + 1);
+    },
+  });
+  await reader.readFrame(0);
+  assert.equal(reader.getDebugState(), undefined, 'Whole-frame reads have no camera selection');
+  const camera = [8, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
+  const query = { volumeToClip: camera, signal: new AbortController().signal };
+  await reader.readView(0, query);
+  await reader.readView(1, { ...query, volumeToClip: fullView, priority: BACKGROUND_PRIORITY });
+  await reader.readFrame(1);
+  assert.equal(reader.getDebugState().frameIndex, 0);
+  assert.deepEqual(reader.getDebugState().volumeToClip, camera);
+  const volume = await reader.readView(0, query);
+  const before = reads;
+  assert.equal(await reader.readView(0, query), volume);
+  assert.equal(reads, before);
+  const debug = reader.getDebugState();
+  assert.equal(debug.cacheBytes, 0);
+  assert.equal(debug.reusedView, true);
+  assert.ok(
+    debug.chunks.filter((chunk) => chunk.selected).every((chunk) => chunk.status === 'ready'),
+  );
+  reader.dispose();
 });
 
 test('custom cell limits validate grids and padded chunks before reading', async () => {

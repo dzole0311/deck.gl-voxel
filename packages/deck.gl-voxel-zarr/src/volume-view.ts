@@ -2,6 +2,7 @@ import { Matrix4 } from '@math.gl/core';
 import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import type { Chunk, Array as ZarrArray } from 'zarrita';
 import { ChunkCache } from './chunk-cache.js';
+import type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
 import { type ProjectedGrid, projectFrame } from './projected-grid.js';
 import { BACKGROUND_PRIORITY, MAX_VISIBLE_READ_PRIORITY } from './request-priority.js';
 import type { Axis } from './zarr-volume.js';
@@ -39,6 +40,17 @@ interface Tile {
   readonly start: Vector3;
   readonly end: Vector3;
   readonly priority: number;
+}
+
+interface DebugView {
+  frameIndex: number;
+  chunks: Omit<ZarrDebugChunk, 'status'>[] | undefined;
+  matrix: readonly number[];
+  clip: readonly number[];
+  cached: Set<string>;
+  loaded: Set<string>;
+  reusedView: boolean;
+  failure: 'cancelled' | 'error' | undefined;
 }
 
 /**
@@ -113,6 +125,7 @@ export class VolumeView {
   private readonly spatialAxes: Vector3;
   private readonly chunkSize: Vector3;
   private disposed = false;
+  private debug: DebugView | undefined;
   private lastView: { key: string; volume: VoxelData } | undefined;
   private readonly columns: readonly [number, number][];
   private readonly rows: readonly [number, number][];
@@ -151,10 +164,45 @@ export class VolumeView {
     });
   }
 
+  /** Inspects the latest foreground query without starting reads or changing cache priority. */
+  getDebugState(): ZarrDebugState | undefined {
+    const debug = this.debug;
+    if (!debug) {
+      return undefined;
+    }
+    if (!debug.chunks) {
+      debug.chunks = [];
+      this.tiles(debug.frameIndex, debug.matrix, debug.clip, debug.chunks);
+    }
+    return {
+      frameIndex: debug.frameIndex,
+      geometry: this.source.geometry,
+      volumeToClip: debug.matrix,
+      cacheBytes: this.cache.byteLength,
+      maxCacheBytes: this.source.maxCacheBytes,
+      reusedView: debug.reusedView,
+      chunks: debug.chunks.map((chunk) => {
+        const status = this.cache.getStatus(chunk.id);
+        return {
+          ...chunk,
+          status: !chunk.selected
+            ? 'outside'
+            : debug.cached.has(chunk.id)
+              ? 'cached'
+              : debug.loaded.has(chunk.id)
+                ? 'ready'
+                : (debug.failure ??
+                  (status === 'missing' ? 'queued' : status === 'cached' ? 'ready' : status)),
+        };
+      }),
+    };
+  }
+
   /** Clears cached chunks and cancels this reader's pending reads */
   dispose(): void {
     this.disposed = true;
     this.lastView = undefined;
+    this.debug = undefined;
     this.cache.clear();
   }
 
@@ -163,8 +211,13 @@ export class VolumeView {
    * Each progress callback receives its own values array, which later reads do not change
    * Progress snapshots are spaced by at least PROGRESS_INTERVAL_MS to limit full-grid copies
    * The returned promise resolves with the completed selection, including NaN outside it
+   * @param kind - Whole-frame reads keep foreground priority without replacing camera diagnostics
    */
-  async read(index: number, options: ZarrViewOptions): Promise<VoxelData> {
+  async read(
+    index: number,
+    options: ZarrViewOptions,
+    kind: 'view' | 'frame' = 'view',
+  ): Promise<VoxelData> {
     const { signal, volumeToClip } = options;
     signal.throwIfAborted();
     if (this.disposed) {
@@ -184,12 +237,39 @@ export class VolumeView {
     ) {
       throw new Error('View clipBounds must be ordered normalized bounds.');
     }
+    const debug: DebugView | undefined =
+      kind === 'view' && (options.priority ?? 0) < BACKGROUND_PRIORITY
+        ? {
+            frameIndex: index,
+            chunks: undefined,
+            matrix: Array.from(volumeToClip),
+            clip: Array.from(clip),
+            cached: new Set<string>(),
+            loaded: new Set<string>(),
+            reusedView: false,
+            failure: undefined,
+          }
+        : undefined;
     const tiles = this.tiles(index, volumeToClip, clip);
+    if (debug) {
+      for (const tile of tiles) {
+        if (this.cache.has(tile.key)) {
+          debug.cached.add(tile.key);
+        }
+      }
+      this.debug = debug;
+    }
     const key = `${index}:${tiles
       .map((tile) => tile.key)
       .sort()
       .join(';')}`;
     if (this.lastView?.key === key) {
+      if (debug) {
+        debug.reusedView = true;
+        for (const tile of tiles) {
+          debug.loaded.add(tile.key);
+        }
+      }
       return this.lastView.volume;
     }
     const [width, height, depth] = this.source.dimensions;
@@ -219,6 +299,7 @@ export class VolumeView {
       );
       readSignal.throwIfAborted();
       this.copy(chunk, tile, index, values, available);
+      debug?.loaded.add(tile.key);
     };
     const publish = (): void => {
       if (options.onProgress) {
@@ -249,12 +330,20 @@ export class VolumeView {
       }
       return volume;
     } catch (error) {
+      if (debug) {
+        debug.failure = signal.aborted ? 'cancelled' : 'error';
+      }
       work.abort();
       throw error;
     }
   }
 
-  private tiles(index: number, matrix: readonly number[], clip: readonly number[]): Tile[] {
+  private tiles(
+    index: number,
+    matrix: readonly number[],
+    clip: readonly number[],
+    debug?: Omit<ZarrDebugChunk, 'status'>[],
+  ): Tile[] {
     const transform = new Matrix4(matrix);
     const { dimensions, axes, array, selection } = this.source;
     const [width, height, depth] = dimensions;
@@ -285,12 +374,11 @@ export class VolumeView {
           // Include one source cell beyond each chunk so interpolation near its edges stays selected
           const min: Vector3 = [xr[0] - 1 / width, yr[0] - 1 / height, (z - 1) / depth];
           const max: Vector3 = [xr[1] + 1 / width, yr[1] + 1 / height, (end[2] + 1) / depth];
-          if (
-            XYZ.some(
+          const selected =
+            !XYZ.some(
               (axis) => max[axis] < (clip[axis] ?? 0) || min[axis] > (clip[axis + 3] ?? 1),
-            ) ||
-            !volumeBoxVisible(min, max, transform)
-          ) {
+            ) && volumeBoxVisible(min, max, transform);
+          if (!selected && !debug) {
             continue;
           }
           const coords = fixed.map((value, dimension) =>
@@ -309,12 +397,18 @@ export class VolumeView {
           const projected = transform.transform([...center, 1]);
           const distance =
             Math.hypot(projected[0] ?? 0, projected[1] ?? 0) / (Math.abs(projected[3] ?? 0) || 1);
-          result.push({
-            key: coords.join(','),
-            start,
-            end,
-            priority: Math.min(MAX_VISIBLE_READ_PRIORITY, distance),
+          const key = coords.join(',');
+          const priority = Math.min(MAX_VISIBLE_READ_PRIORITY, distance);
+          debug?.push({
+            id: key,
+            min: [xr[0], yr[0], z / depth],
+            max: [xr[1], yr[1], end[2] / depth],
+            selected,
+            priority,
           });
+          if (selected) {
+            result.push({ key, start, end, priority });
+          }
         }
       }
     }

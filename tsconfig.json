@@ -8,6 +8,9 @@
       "path": "./packages/deck.gl-voxel-zarr"
     },
     {
+      "path": "./examples/ui"
+    },
+    {
       "path": "./examples/maplibre"
     }
   ]

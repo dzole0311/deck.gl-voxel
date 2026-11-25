@@ -12,7 +12,7 @@
   "scripts": {
     "prepare": "lefthook install",
     "dev:maplibre": "pnpm build && pnpm --filter voxel-maplibre-example dev",
-    "test": "pnpm build && node --test packages/*/tests/*.test.mjs",
+    "test": "pnpm build && node --test packages/*/tests/*.test.mjs examples/ui/tests/*.test.mjs",
     "test:browser": "pnpm build && node tests/browser.mjs",
     "build": "tsc --build",
     "watch": "tsc --build --watch",
