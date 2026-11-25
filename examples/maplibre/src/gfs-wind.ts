@@ -10,10 +10,10 @@ import { type Chunk, get, open, registry, slice, type Array as ZarrArray } from 
 
 const COLLECTION = 'https://stac.dynamical.org/noaa-gfs-forecast-virtual/collection.json';
 const GROUP = 'height_above_mean_sea_level';
-const WEST = -125;
-const EAST = -66;
-const SOUTH = 24;
-const NORTH = 50;
+const WEST = -94;
+const EAST = -76;
+const SOUTH = 19;
+const NORTH = 31;
 const HEIGHT_STEP_METERS = 500;
 const HEIGHT_COUNT = 9;
 const FRAME_COUNT = 15;
@@ -32,7 +32,7 @@ registry.set('gribberish', async () => {
 });
 
 /**
- * Opens the eastward and northward wind fields for one GFS forecast over the contiguous United States.
+ * Opens the eastward and northward wind fields for one GFS forecast over the Gulf and Florida.
  * Dynamical's catalog links to an Icechunk index. For this dataset the index points
  * to the byte ranges of NOAA's original GRIB weather files, which the browser reads directly.
  * @param firstTime - Time NOAA started this forecast run, in milliseconds since the Unix epoch.

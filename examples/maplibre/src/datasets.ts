@@ -1,7 +1,7 @@
 import type { ZarrLayerSourceOptions, ZarrVoxelLayerProps } from 'deck.gl-voxel-zarr';
 
 /** Where to load the data and how to show it on the map. */
-export interface Dataset {
+interface Dataset {
   /** Stable layer ID and dataset selector value. */
   readonly id: string;
   /** Short description of the data shown in the panel. */
@@ -63,41 +63,8 @@ const HELENE_URL =
 const MILTON_RUN = Date.UTC(2024, 9, 8, 12);
 const MILTON_STEP_HOURS = 3;
 
-/** Available example datasets; the generated chunk demo is served by the development server. */
-export type DatasetId = 'helene' | 'milton' | 'chunks';
-
 /** Volumes available in the dataset selector. */
-export const datasets: Record<DatasetId, Dataset> = {
-  chunks: {
-    id: 'chunks',
-    description: 'Generated volume with 64 chunks per time step',
-    credit: 'Synthetic data generated locally for the chunk inspector',
-    source: '/chunk-demo.zarr/zarr.json',
-    volumeSource: `${location.origin}/chunk-demo.zarr`,
-    sourceOptions: {
-      field: '.',
-      layout: {
-        axes: ['time', 'z', 'y', 'x'],
-        origin: [119.46666666666667, 283.53154657876973, 0],
-        spacing: [0.4444444444444442, 0.40103693425561904, 0.007169442226028831],
-      },
-    },
-    center: [-86, 27],
-    zoom: 6.2,
-    verticalExaggeration: 30,
-    density: 0.2,
-    firstTime: Date.UTC(2024, 8, 25),
-    stepHours: 1,
-    initialFrame: 0,
-    valueRange: [0, 1],
-    isovalueStep: 0.01,
-    colorBy: 'z',
-    transferFunction: new Uint8Array([
-      33, 145, 140, 0, 70, 175, 200, 8, 120, 200, 220, 40, 253, 231, 37, 110,
-    ]),
-    valueLabel: 'Value',
-    formatValue: (value) => value.toFixed(2),
-  },
+export const datasets: Record<'helene' | 'milton', Dataset> = {
   helene: {
     id: 'helene',
     description: 'ERA5 cloud cover - September 2024',
@@ -128,15 +95,15 @@ export const datasets: Record<DatasetId, Dataset> = {
   },
   milton: {
     id: 'milton',
-    description: 'GFS wind over the contiguous US - Run Oct 8, 12 UTC',
+    description: 'GFS wind speed - Run Oct 8, 12 UTC',
     credit: 'NOAA NWS NCEP GFS data via Dynamical.org (CC BY 4.0).',
     source: 'https://dynamical.org/catalog/noaa-gfs-forecast-virtual/',
     volumeSource: async (signal, context) => {
       const { openGfsWind } = await import('./gfs-wind.js');
       return openGfsWind(MILTON_RUN, MILTON_STEP_HOURS, signal, context);
     },
-    center: [-96, 38],
-    zoom: 3.2,
+    center: [-87, 25],
+    zoom: 5,
     verticalExaggeration: 71,
     density: 4,
     firstTime: MILTON_RUN,
