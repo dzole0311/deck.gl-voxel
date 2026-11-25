@@ -175,13 +175,16 @@ function sampleAxis(index: number, count: number): AxisSample {
 }
 
 /**
- * Moves each horizontal layer onto the map grid. Blend the nearby source cells with data
- * and give them all of the weight that missing cells would have used.
- * @param frame - Decoded scalar frame in Z, Y, X dimension order.
- * @param grid - Map grid with source cell indices and blend weights for each row and column.
- * @param noDataValue - Optional number that marks missing cells.
- * @param available - Optional readiness flags in source stride order; unknown contributors keep a target cell unloaded.
- * @returns A new grid whose flat array changes X fastest.
+ * Maps each horizontal source layer onto the Web Mercator grid
+ * Each output cell blends up to four neighboring source cells using their distance weights
+ * Missing values are excluded and the remaining weights are rescaled to sum to one
+ * If any contributing neighbor has not loaded, the output stays NaN until it arrives
+ * This keeps a partial blend from appearing as though it were a completed value
+ * @param frame - Decoded frame with dimensions in Z, Y, X order
+ * @param grid - Source cell indices and blend weights for each output row and column
+ * @param noDataValue - Optional value that marks missing cells
+ * @param available - Source readiness flags in the frame's stride order, with zero for cells not yet loaded
+ * @returns A new grid with X changing fastest in memory
  */
 export function projectFrame(
   frame: Chunk<'float32'>,

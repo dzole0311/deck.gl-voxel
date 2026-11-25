@@ -2,16 +2,18 @@ import type { VoxelData } from 'deck.gl-voxel';
 import { ChunkCache } from './chunk-cache.js';
 import type { ZarrVolume } from './zarr-volume.js';
 
-/** Keeps decoded frames for readers that do not support viewport reads. */
+/** Caches whole frames when camera reads are unavailable */
 export class FrameCache {
   private readonly cache: ChunkCache<number, VoxelData>;
 
   constructor(
     private readonly reader: ZarrVolume,
     maxBytes: number,
+    maxRequests = 6,
   ) {
     this.cache = new ChunkCache({
       maxBytes,
+      maxRequests,
       load: (index, signal) => reader.readFrame(index, signal),
       byteLength: (volume) => volume.values.buffer.byteLength,
     });
@@ -27,12 +29,12 @@ export class FrameCache {
     return this.cache.size === this.frameCount;
   }
 
-  /** Whether a frame can be drawn without fetching it. */
+  /** Whether the frame is already in the cache */
   has(index: number): boolean {
     return this.cache.has(index);
   }
 
-  /** Shares a frame read without transferring cancellation ownership between callers. */
+  /** Shares a frame read while allowing each caller to cancel its own wait */
   read(index: number, signal: AbortSignal): Promise<VoxelData> {
     return this.cache.read(index, signal);
   }

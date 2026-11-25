@@ -8,7 +8,12 @@ interface PendingRead<T> {
   start?: () => void;
 }
 
-/** A bounded decoded-data cache. The loader must honor its shared cancellation signal. */
+/**
+ * Configures cached value sizes and the number of loads allowed to run at once
+ * maxBytes counts retained values using byteLength, excluding pending loads
+ * The loader receives a shared signal that aborts when no callers still need the read
+ * It must pass that signal to its fetches and stop work when aborted
+ */
 export interface ChunkCacheOptions<K, T> {
   readonly maxBytes: number;
   readonly maxRequests?: number;
@@ -16,11 +21,16 @@ export interface ChunkCacheOptions<K, T> {
   readonly byteLength: (value: T) => number;
 }
 
-/** Shares reads with independent cancellation, bounded concurrency and least-recently-used eviction. */
+/**
+ * Callers requesting the same key share one load and receive the same value
+ * Cancelling one caller leaves the load running while another caller still needs it
+ * Once loaded, values are kept within the byte budget by removing the least recently used first
+ */
 export class ChunkCache<K, T> {
   private readonly values = new Map<K, T>();
   private readonly pending = new Map<K, PendingRead<T>>();
   private readonly queue: PendingRead<T>[] = [];
+  private queueDirty = false;
   private bytes = 0;
   private active = 0;
   private readonly maxRequests: number;
@@ -39,17 +49,20 @@ export class ChunkCache<K, T> {
     }
   }
 
-  /** Number of retained decoded entries; pending reads are excluded. */
+  /** Number of cached values, excluding pending reads */
   get size(): number {
     return this.values.size;
   }
 
-  /** Whether an entry can be served without I/O. */
+  /** Whether the key is already in the cache */
   has(key: K): boolean {
     return this.values.has(key);
   }
 
-  /** Lower priorities run first. Joining a queued read can raise its priority. */
+  /**
+   * Lower priority numbers run first
+   * A caller can move a shared queued read ahead by requesting a lower number
+   */
   async read(key: K, signal: AbortSignal, priority = 0): Promise<T> {
     signal.throwIfAborted();
     const cached = this.values.get(key);
@@ -105,11 +118,14 @@ export class ChunkCache<K, T> {
       entry = created;
       this.pending.set(key, entry);
     }
-    entry.priority = Math.min(entry.priority, priority);
+    if (priority < entry.priority) {
+      entry.priority = priority;
+      this.queueDirty = true;
+    }
     return this.subscribe(key, entry, signal);
   }
 
-  /** Aborts pending work and releases retained decoded values. */
+  /** Cancels pending reads and clears cached values */
   clear(): void {
     for (const entry of this.pending.values()) {
       entry.controller.abort();
@@ -134,6 +150,7 @@ export class ChunkCache<K, T> {
       };
       entry.controller.signal.addEventListener('abort', abort, { once: true });
       this.queue.push(entry);
+      this.queueDirty = true;
       if (entry.controller.signal.aborted) {
         abort();
       }
@@ -142,8 +159,11 @@ export class ChunkCache<K, T> {
   }
 
   private drain(): void {
-    this.queue.sort((left, right) => left.priority - right.priority);
     while (this.active < this.maxRequests) {
+      if (this.queueDirty) {
+        this.queue.sort((left, right) => left.priority - right.priority);
+        this.queueDirty = false;
+      }
       const next = this.queue.shift();
       if (!next) {
         break;

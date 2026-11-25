@@ -1,24 +1,38 @@
+import { Matrix4 } from '@math.gl/core';
 import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import type { Chunk, Array as ZarrArray } from 'zarrita';
 import { ChunkCache } from './chunk-cache.js';
 import { type ProjectedGrid, projectFrame } from './projected-grid.js';
+import { BACKGROUND_PRIORITY, MAX_VISIBLE_READ_PRIORITY } from './request-priority.js';
 import type { Axis } from './zarr-volume.js';
 
-/** A camera query in normalized grid coordinates. Clip-space uses deck.gl's -w to w convention. */
+/**
+ * Camera query where [0, 0, 0] and [1, 1, 1] are opposite corners of the volume
+ * volumeToClip transforms those coordinates to the camera's [x, y, z, w] coordinates
+ * A point is inside the camera bounds when x, y and z each lie between -w and w
+ * Keep w until after visibility checks so boxes crossing behind the camera are handled correctly
+ */
 export interface ZarrViewOptions {
   readonly volumeToClip: readonly number[];
   readonly signal: AbortSignal;
   readonly clipBounds?: readonly [number, number, number, number, number, number];
-  /** Immutable partial volumes; unresolved cells remain NaN. Loading finishes when readView resolves. */
+  /**
+   * Partial grids with NaN where data has not loaded
+   * Treat the values as read-only because the renderer and reader can retain the grid
+   * Loading finishes when readView resolves
+   */
   readonly onProgress?: (volume: VoxelData) => void;
   /**
-   * Background reads yield to visible work.
+   * Added to each chunk's screen-center distance priority, with lower totals starting first
+   * Background reads use a larger offset so queued visible reads start before them
+   * This does not interrupt reads that have already started
    * @default 0
    */
   readonly priority?: number;
 }
 
 const XYZ = [0, 1, 2] as const;
+const PROGRESS_INTERVAL_MS = 50;
 
 interface Tile {
   readonly key: string;
@@ -27,21 +41,17 @@ interface Tile {
   readonly priority: number;
 }
 
-/** Rejects only boxes wholly outside a clip plane; intersecting boxes remain conservative. */
+/**
+ * Skips a box only when all eight corners are outside the same camera boundary
+ * A box crossing a boundary stays selected, even if some of it is off screen
+ */
 export function volumeBoxVisible(min: Vector3, max: Vector3, matrix: readonly number[]): boolean {
-  const corners: number[][] = [];
+  const transform = matrix instanceof Matrix4 ? matrix : new Matrix4(matrix);
+  const corners: ArrayLike<number>[] = [];
   for (const x of [min[0], max[0]]) {
     for (const y of [min[1], max[1]]) {
       for (const z of [min[2], max[2]]) {
-        corners.push(
-          [0, 1, 2, 3].map(
-            (row) =>
-              (matrix[row] ?? 0) * x +
-              (matrix[4 + row] ?? 0) * y +
-              (matrix[8 + row] ?? 0) * z +
-              (matrix[12 + row] ?? 0),
-          ),
-        );
+        corners.push(transform.transform([x, y, z, 1]));
       }
     }
   }
@@ -79,7 +89,7 @@ function outputRanges(
   return ranges;
 }
 
-/** Normalized metadata shared by the plain-Zarr and GeoZarr readers. */
+/** Grid metadata used by both the plain Zarr and GeoZarr readers */
 export interface VolumeViewSource {
   readonly array: Pick<ZarrArray<'float32'>, 'chunks' | 'getChunk'>;
   readonly axes: readonly Axis[];
@@ -93,7 +103,11 @@ export interface VolumeViewSource {
   readonly maxRequests: number;
 }
 
-/** Reads visible decoded chunks into one grid, preserving the renderer's global blending and styling domain. */
+/**
+ * Selects chunks for the camera and copies them into a full-sized grid
+ * Unloaded cells stay NaN so the renderer can skip them without moving the loaded cells
+ * Keeping one volume lets the renderer blend along each ray across chunk boundaries
+ */
 export class VolumeView {
   private readonly cache: ChunkCache<string, Chunk<'float32'>>;
   private readonly spatialAxes: Vector3;
@@ -125,19 +139,31 @@ export class VolumeView {
     this.cache = new ChunkCache({
       maxBytes: source.maxCacheBytes,
       maxRequests: source.maxRequests,
-      load: (key, signal) => source.array.getChunk(key.split(',').map(Number), { signal }),
-      byteLength: (chunk) => chunk.data.buffer.byteLength,
+      load: async (key, signal) => {
+        const chunk = await source.array.getChunk(key.split(',').map(Number), { signal });
+        signal.throwIfAborted();
+        // Copy a chunk view so it does not keep a larger shared buffer in the cache
+        return chunk.data.byteLength === chunk.data.buffer.byteLength
+          ? chunk
+          : { ...chunk, data: chunk.data.slice() };
+      },
+      byteLength: (chunk) => chunk.data.byteLength,
     });
   }
 
-  /** Releases decoded chunks and cancels outstanding requests owned by this reader. */
+  /** Clears cached chunks and cancels this reader's pending reads */
   dispose(): void {
     this.disposed = true;
     this.lastView = undefined;
     this.cache.clear();
   }
 
-  /** Reads only chunks that can contribute to the view, publishing bounded-rate immutable snapshots. */
+  /**
+   * Loads chunks overlapping the camera and clip bounds, reusing cached chunks first
+   * Each progress callback receives its own values array, which later reads do not change
+   * Progress snapshots are spaced by at least PROGRESS_INTERVAL_MS to limit full-grid copies
+   * The returned promise resolves with the completed selection, including NaN outside it
+   */
   async read(index: number, options: ZarrViewOptions): Promise<VoxelData> {
     const { signal, volumeToClip } = options;
     signal.throwIfAborted();
@@ -211,14 +237,14 @@ export class VolumeView {
       await Promise.all(
         missing.map(async (tile) => {
           await load(tile);
-          if (performance.now() - lastPublish >= 50) {
+          if (performance.now() - lastPublish >= PROGRESS_INTERVAL_MS) {
             publish();
           }
         }),
       );
       readSignal.throwIfAborted();
       const volume = snapshot();
-      if ((options.priority ?? 0) < 1000) {
+      if ((options.priority ?? 0) < BACKGROUND_PRIORITY) {
         this.lastView = { key, volume };
       }
       return volume;
@@ -229,6 +255,7 @@ export class VolumeView {
   }
 
   private tiles(index: number, matrix: readonly number[], clip: readonly number[]): Tile[] {
+    const transform = new Matrix4(matrix);
     const { dimensions, axes, array, selection } = this.source;
     const [width, height, depth] = dimensions;
     const fixed = axes.map((axis, dimension) =>
@@ -255,13 +282,14 @@ export class VolumeView {
           if (xr[0] >= xr[1] || yr[0] >= yr[1]) {
             continue;
           }
+          // Include one source cell beyond each chunk so interpolation near its edges stays selected
           const min: Vector3 = [xr[0] - 1 / width, yr[0] - 1 / height, (z - 1) / depth];
           const max: Vector3 = [xr[1] + 1 / width, yr[1] + 1 / height, (end[2] + 1) / depth];
           if (
             XYZ.some(
               (axis) => max[axis] < (clip[axis] ?? 0) || min[axis] > (clip[axis + 3] ?? 1),
             ) ||
-            !volumeBoxVisible(min, max, matrix)
+            !volumeBoxVisible(min, max, transform)
           ) {
             continue;
           }
@@ -278,24 +306,14 @@ export class VolumeView {
             (min[1] + max[1]) / 2,
             (min[2] + max[2]) / 2,
           ];
-          const w =
-            (matrix[3] ?? 0) * center[0] +
-            (matrix[7] ?? 0) * center[1] +
-            (matrix[11] ?? 0) * center[2] +
-            (matrix[15] ?? 1);
-          const projected = [0, 1].map(
-            (row) =>
-              ((matrix[row] ?? 0) * center[0] +
-                (matrix[4 + row] ?? 0) * center[1] +
-                (matrix[8 + row] ?? 0) * center[2] +
-                (matrix[12 + row] ?? 0)) /
-              (Math.abs(w) || 1),
-          );
+          const projected = transform.transform([...center, 1]);
+          const distance =
+            Math.hypot(projected[0] ?? 0, projected[1] ?? 0) / (Math.abs(projected[3] ?? 0) || 1);
           result.push({
             key: coords.join(','),
             start,
             end,
-            priority: Math.min(100, Math.hypot(...projected)),
+            priority: Math.min(MAX_VISIBLE_READ_PRIORITY, distance),
           });
         }
       }

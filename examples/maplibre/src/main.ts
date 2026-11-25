@@ -386,7 +386,7 @@ function start(): void {
           onError: (error) => {
             if (dataset === selected) {
               setPlaying(false);
-              frame = completeFrame ?? frame;
+              frame = completeFrame;
               loadError = error;
               redraw();
               reportError(error);

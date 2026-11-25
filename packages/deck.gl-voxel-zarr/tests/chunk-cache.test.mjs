@@ -13,7 +13,7 @@ async function until(predicate) {
   assert.fail('Expected queued work did not run');
 }
 
-test('queued reads honor priority, concurrency and cancellation', async () => {
+test('queued reads honor priority, promotion, concurrency and cancellation', async () => {
   const started = [],
     pending = new Map();
   const cache = new ChunkCache({
@@ -30,6 +30,9 @@ test('queued reads honor priority, concurrency and cancellation', async () => {
   await until(() => pending.has('active'));
   const far = cache.read('far', signal, 10);
   const near = cache.read('near', signal, 0);
+  const background = cache.read('background', signal, 20);
+  await setImmediate();
+  const promoted = cache.read('background', signal, 5);
   const cancelled = new AbortController();
   const rejected = assert.rejects(cache.read('cancelled', cancelled.signal, -1), /cancelled/);
   cancelled.abort(new Error('cancelled'));
@@ -40,10 +43,14 @@ test('queued reads honor priority, concurrency and cancellation', async () => {
   assert.deepEqual(started, ['active', 'near']);
   pending.get('near')(2);
   await near;
+  await until(() => pending.has('background'));
+  assert.deepEqual(started, ['active', 'near', 'background']);
+  pending.get('background')(3);
+  assert.deepEqual(await Promise.all([background, promoted]), [3, 3]);
   await until(() => pending.has('far'));
-  pending.get('far')(3);
+  pending.get('far')(4);
   await far;
-  assert.deepEqual(started, ['active', 'near', 'far']);
+  assert.deepEqual(started, ['active', 'near', 'background', 'far']);
 });
 
 test('shared cancellation preserves other subscribers and cached results', async () => {

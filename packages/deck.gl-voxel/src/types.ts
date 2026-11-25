@@ -41,7 +41,7 @@ export interface VoxelData {
   readonly noDataValue?: number;
 }
 
-/** Grid geometry without scalar values, used for camera transforms and loading decisions. */
+/** Grid bounds without scalar values, used for camera transforms and chunk selection */
 export type VoxelGeometry = Pick<VoxelData, 'dimensions' | 'origin' | 'spacing'>;
 
 /** Provides the depth of opaque objects drawn with the same GPU device and camera. */
