@@ -28,7 +28,7 @@ interface VerticalGrid {
 }
 
 /** Where the grid sits on the map and which source cells to blend for each row and column. */
-interface ProjectedGrid {
+export interface ProjectedGrid {
   readonly dimensions: Vector3;
   readonly origin: Vector3;
   readonly spacing: Vector3;
@@ -175,17 +175,22 @@ function sampleAxis(index: number, count: number): AxisSample {
 }
 
 /**
- * Moves each horizontal layer onto the map grid. Blend the nearby source cells with data
- * and give them all of the weight that missing cells would have used.
- * @param frame - Decoded scalar frame in Z, Y, X dimension order.
- * @param grid - Map grid with source cell indices and blend weights for each row and column.
- * @param noDataValue - Optional number that marks missing cells.
- * @returns A new grid whose flat array changes X fastest.
+ * Maps each horizontal source layer onto the Web Mercator grid
+ * Each output cell blends up to four neighboring source cells using their distance weights
+ * Missing values are excluded and the remaining weights are rescaled to sum to one
+ * If any contributing neighbor has not loaded, the output stays NaN until it arrives
+ * This keeps a partial blend from appearing as though it were a completed value
+ * @param frame - Decoded frame with dimensions in Z, Y, X order
+ * @param grid - Source cell indices and blend weights for each output row and column
+ * @param noDataValue - Optional value that marks missing cells
+ * @param available - Source readiness flags in the frame's stride order, with zero for cells not yet loaded
+ * @returns A new grid with X changing fastest in memory
  */
 export function projectFrame(
   frame: Chunk<'float32'>,
   grid: ProjectedGrid,
   noDataValue?: number,
+  available?: Uint8Array,
 ): VoxelData {
   const [width, height, depth] = grid.dimensions;
   const [strideZ = 0, strideY = 0, strideX = 0] = frame.stride;
@@ -196,6 +201,7 @@ export function projectFrame(
       for (const [x, column] of grid.columns.entries()) {
         let sum = 0;
         let weight = 0;
+        let ready = true;
 
         for (const j of [0, 1] as const) {
           for (const i of [0, 1] as const) {
@@ -203,6 +209,13 @@ export function projectFrame(
             const contribution =
               (i === 0 ? 1 - column[2] : column[2]) * (j === 0 ? 1 - row[2] : row[2]);
 
+            if (
+              contribution > 0 &&
+              available &&
+              !available[z * strideZ + row[j] * strideY + column[i] * strideX]
+            ) {
+              ready = false;
+            }
             if (value !== undefined && Number.isFinite(value) && value !== noDataValue) {
               sum += value * contribution;
               weight += contribution;
@@ -210,7 +223,7 @@ export function projectFrame(
           }
         }
 
-        values[x + width * (y + height * z)] = weight > 0 ? sum / weight : Number.NaN;
+        values[x + width * (y + height * z)] = ready && weight > 0 ? sum / weight : Number.NaN;
       }
     }
   }

@@ -1,8 +1,10 @@
-import type { Vector3, VoxelData } from 'deck.gl-voxel';
+import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import { type Chunk, FetchStore, get, open, root, withRangeCoalescing } from 'zarrita';
 
 import { hasGeoZarrMetadata, readGeoZarrField, readSpatialAttributes } from './geo-zarr-volume.js';
 import { createProjectedGrid, projectFrame } from './projected-grid.js';
+import { DEFAULT_MAX_CELLS } from './volume-limits.js';
+import { VolumeView, type ZarrViewOptions } from './volume-view.js';
 
 /** Labels for the stored array's dimensions. */
 export type Axis = 'x' | 'y' | 'z' | 'time' | null;
@@ -60,8 +62,13 @@ export interface ZarrVolumeOptions {
   readonly verticalPositive?: 'up' | 'down';
 
   /**
-   * Maximum number of cells in one frame. Zarr stores data in blocks called chunks.
-   * A chunk can include several times, so even a read for one frame can download extra data.
+   * Maximum X × Y × Z cell count, checked before loading scalar values
+   * Camera reads still allocate a full-sized grid with NaN in unloaded cells
+   * The default is an application cap, not a Zarr or GPU limit
+   * At the default, each Float32 grid uses 8 MB and a projected read also uses 2 MB of readiness flags
+   * Progress and final results allocate new grids, and a previous completed grid may stay displayed
+   * Decoded chunks have their own cache budget, so this does not cap total memory use
+   * Raising this allows larger grids and increases their memory use
    * @default 2000000
    */
   readonly maxCells?: number;
@@ -77,12 +84,37 @@ export interface ZarrVolumeOptions {
   /** Intercepts every metadata, coordinate, chunk and shard-range request. Preserve the request's Range header and signal. */
   readonly fetch?: (request: Request) => Promise<Response>;
 
+  /**
+   * Byte limit for cached decoded chunks
+   * Displayed grids and pending decoding are outside this limit
+   * @default 67108864
+   */
+  readonly maxCacheBytes?: number;
+
+  /**
+   * Maximum number of chunk reads running at once across this reader's views
+   * @default 6
+   */
+  readonly maxRequests?: number;
+
   /** Cancels metadata and coordinate reads. Frame reads accept their own signal. */
   readonly signal?: AbortSignal;
 }
 
 /** An open field that can read one time step at a time. */
 export interface ZarrVolume {
+  /**
+   * Grid bounds used to select chunks for the camera
+   * Custom readers that only load whole frames can leave this out
+   */
+  readonly geometry?: VoxelGeometry;
+
+  /** Optional camera read that returns a grid with NaN outside the selected chunks */
+  readView?(index: number, options: ZarrViewOptions): Promise<VoxelData>;
+
+  /** Clears this reader's cache and cancels pending chunk reads */
+  dispose?(): void;
+
   /** Number of frames. An array with no time axis has one frame. */
   readonly frameCount: number;
 
@@ -101,17 +133,14 @@ export interface ZarrVolume {
   readFrame(index: number, signal?: AbortSignal): Promise<VoxelData>;
 }
 
-const DEFAULT_MAX_CELLS = 2_000_000;
-
 /**
- * Opens a float32 volume from a Zarr v2 or v3 store. This reads metadata and any needed
- * coordinates. Call readFrame to fetch the data values. GeoZarr metadata can tell us
- * where the grid sits on a map. With plain Zarr, put that information in layout.
- *
- * @param url - HTTP(S) store root. Cross-origin reads require CORS.
- * @param options - Field, grid geometry and frame size limit.
- * @returns A reader that fetches the stored blocks needed for each requested frame.
- * @throws {Error} If the field, geometry, or selected frame size is unsupported.
+ * Opens a float32 volume from a Zarr v2 or v3 store and reads its metadata and coordinates
+ * Use readView to load chunks for the camera or readFrame to load the whole grid
+ * GeoZarr supplies map placement, while plain Zarr requires layout
+ * @param url - HTTP(S) store root with CORS enabled for cross-origin reads
+ * @param options - Field, grid geometry and frame size limit
+ * @returns A reader that fetches the chunks needed for each requested frame or view
+ * @throws {Error} If the field, geometry or selected frame size is unsupported
  * @see https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html
  * @see https://geozarr.org/conventions.html
  */
@@ -181,7 +210,26 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
   const yAxis = spatialAxes.indexOf('y');
   const zAxis = spatialAxes.indexOf('z');
 
+  const geometry: VoxelGeometry = grid
+    ? { dimensions: grid.dimensions, origin: grid.origin, spacing: grid.spacing }
+    : { dimensions, ...(layout && { origin: layout.origin, spacing: layout.spacing }) };
+  const view = new VolumeView({
+    array: scalar,
+    axes,
+    dimensions,
+    geometry,
+    frameCount,
+    selection: options.selection ?? {},
+    grid,
+    noDataValue,
+    maxCacheBytes: options.maxCacheBytes ?? 64 * 1024 * 1024,
+    maxRequests: options.maxRequests ?? 6,
+  });
+
   return {
+    geometry,
+    readView: (index, options) => view.read(index, options),
+    dispose: () => view.dispose(),
     frameCount,
     level: geo?.level.path ?? '.',
     /** {@inheritDoc ZarrVolume.readFrame} */

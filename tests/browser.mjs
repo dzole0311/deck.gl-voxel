@@ -456,6 +456,10 @@ try {
     'data replacement destroys previous GPU resources',
   );
 
+  let releaseDelayedChunk = () => {};
+  const delayedChunk = new Promise((resolve) => {
+    releaseDelayedChunk = resolve;
+  });
   await page.route('**/zarr-layer-fixture/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/grid/zarr.json')) {
@@ -465,7 +469,7 @@ try {
           node_type: 'array',
           shape: [2, 8, 12, 16],
           data_type: 'float32',
-          chunk_grid: { name: 'regular', configuration: { chunk_shape: [1, 8, 12, 16] } },
+          chunk_grid: { name: 'regular', configuration: { chunk_shape: [1, 8, 12, 8] } },
           chunk_key_encoding: { name: 'default', configuration: { separator: '/' } },
           codecs: [{ name: 'bytes', configuration: { endian: 'little' } }],
           fill_value: 0,
@@ -473,7 +477,10 @@ try {
         },
       });
     } else if (path.includes('/c/')) {
-      await route.fulfill({ body: Buffer.from(new Float32Array(16 * 12 * 8).fill(0.5).buffer) });
+      if (path.endsWith('/c/0/0/0/1')) {
+        await delayedChunk;
+      }
+      await route.fulfill({ body: Buffer.from(new Float32Array(8 * 12 * 8).fill(0.5).buffer) });
     } else {
       await route.fulfill({ status: 404 });
     }
@@ -482,7 +489,7 @@ try {
   await page.evaluate(() => {
     const app = window.voxelFixture;
     const style = app.lastLayer.props;
-    Object.assign(app, { loadedFrames: 0, sourceLoads: 0 });
+    Object.assign(app, { loadedFrames: 0, partialFrames: 0, lastLoadedFrame: -1, sourceLoads: 0 });
     const layer = new app.ZarrVoxelLayer({
       ...style,
       id: 'url-volume',
@@ -495,15 +502,31 @@ try {
       onSourceLoad: () => {
         app.sourceLoads++;
       },
+      onVolumeProgress: () => {
+        app.partialFrames++;
+      },
       onVolumeLoad: () => {
         app.loadedFrames++;
+        app.lastLoadedFrame = app.deck.props.layers[0].props.frameIndex ?? 0;
       },
     });
     app.deck.setProps({ layers: [layer] });
   });
+  await page.waitForFunction(() => window.voxelFixture.partialFrames > 0);
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  const partial = PNG.sync.read(await page.screenshot());
+  assert.ok(
+    pixel(partial, 170, 200)[0] > 70,
+    'a ready chunk paints while another chunk is still downloading',
+  );
+  assert.ok(pixel(partial, 230, 200)[0] < 4, 'unloaded chunks remain transparent');
+  assert.equal(await page.evaluate(() => window.voxelFixture.loadedFrames), 0);
+  releaseDelayedChunk();
   await page.waitForFunction(() => {
     const app = window.voxelFixture;
-    return app.loadedFrames === 1 && app.deck.props.layers[0].isLoaded;
+    return app.lastLoadedFrame === 0 && app.deck.props.layers[0].isLoaded;
   });
   const loaded = pixel(PNG.sync.read(await page.screenshot()));
   assert.ok(
@@ -525,7 +548,8 @@ try {
   });
   await page.waitForFunction(
     () =>
-      window.voxelFixture.loadedFrames === 2 && window.voxelFixture.deck.props.layers[0].isLoaded,
+      window.voxelFixture.lastLoadedFrame === 1 &&
+      window.voxelFixture.deck.props.layers[0].isLoaded,
   );
   assert.equal(
     await page.evaluate(() => window.voxelFixture.sourceLoads),
@@ -581,7 +605,7 @@ try {
   assert.deepEqual(await page.evaluate(() => window.voxelFixture.errors), []);
   assert.deepEqual(errors, [], 'no browser or GPU validation errors');
   console.log(
-    'WebGPU browser checks passed: transfer function, step correction, clipping, missing data, axes, depth, resize, and resource disposal.',
+    'WebGPU browser checks passed: transfer function, step correction, clipping, missing data, axes, depth, progressive loading, resize, and resource disposal.',
   );
 } finally {
   await browser.close();

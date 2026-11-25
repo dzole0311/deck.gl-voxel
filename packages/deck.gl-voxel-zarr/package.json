@@ -23,7 +23,8 @@
     "deck.gl-voxel": "workspace:*",
     "@developmentseed/geozarr": "0.10.0",
     "@math.gl/web-mercator": "4.1.0",
-    "zarrita": "0.7.5"
+    "zarrita": "0.7.5",
+    "@math.gl/core": "4.1.0"
   },
   "peerDependencies": {
     "@deck.gl/core": "9.3.12"

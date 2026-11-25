@@ -184,7 +184,7 @@ export function packVolume(volume: VoxelData): Float32Array {
  * @param volume - Grid with optional signed spacing.
  * @returns X, Y and Z distances in layer units, with the sign preserved for flipped axes.
  */
-export function getExtent(volume: VoxelData): Vector3 {
+export function getExtent(volume: Pick<VoxelData, 'dimensions' | 'spacing'>): Vector3 {
   const spacing = volume.spacing ?? [1, 1, 1];
 
   return [

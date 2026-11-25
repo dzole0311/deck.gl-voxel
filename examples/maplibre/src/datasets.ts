@@ -98,9 +98,9 @@ export const datasets: Record<'helene' | 'milton', Dataset> = {
     description: 'GFS wind speed - Run Oct 8, 12 UTC',
     credit: 'NOAA NWS NCEP GFS data via Dynamical.org (CC BY 4.0).',
     source: 'https://dynamical.org/catalog/noaa-gfs-forecast-virtual/',
-    volumeSource: async (signal) => {
+    volumeSource: async (signal, context) => {
       const { openGfsWind } = await import('./gfs-wind.js');
-      return openGfsWind(MILTON_RUN, MILTON_STEP_HOURS, signal);
+      return openGfsWind(MILTON_RUN, MILTON_STEP_HOURS, signal, context);
     },
     center: [-87, 25],
     zoom: 5,
