@@ -12,6 +12,7 @@ import {
   type VoxelLayerProps,
 } from 'deck.gl-voxel';
 import { FrameCache } from './frame-cache.js';
+import { BACKGROUND_PRIORITY } from './request-priority.js';
 import type { ZarrViewOptions } from './volume-view.js';
 import { openZarrVolume, type ZarrVolume, type ZarrVolumeOptions } from './zarr-volume.js';
 
@@ -428,7 +429,7 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
             await reader.readView((start + offset) % cache.frameCount, {
               ...view,
               signal,
-              priority: 1000,
+              priority: BACKGROUND_PRIORITY,
             });
           } else {
             await cache.read((start + offset) % cache.frameCount, signal);

@@ -3,11 +3,19 @@
   "compilerOptions": {
     "noEmit": true,
     "tsBuildInfoFile": "./node_modules/.cache/tsconfig.tsbuildinfo",
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "references": [
-    { "path": "../../packages/deck.gl-voxel" },
-    { "path": "../../packages/deck.gl-voxel-zarr" }
+    {
+      "path": "../../packages/deck.gl-voxel"
+    },
+    {
+      "path": "../../packages/deck.gl-voxel-zarr"
+    },
+    {
+      "path": "../ui"
+    }
   ]
 }
