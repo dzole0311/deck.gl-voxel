@@ -1,3 +1,14 @@
+export type { CellGrid, CellHit, CellMesh } from './cell-grid.js';
+export {
+  cellValue,
+  displayElevation,
+  getCellMeshBounds,
+  physicalElevation,
+  pickCellCollection,
+  pickCellMesh,
+  prepareCellMesh,
+} from './cell-grid.js';
+export { CellLayer, type CellLayerProps } from './cell-layer.js';
 export type {
   Vector3,
   VoxelData,
