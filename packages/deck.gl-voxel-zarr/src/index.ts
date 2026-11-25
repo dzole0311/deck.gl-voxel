@@ -1,3 +1,13 @@
+export {
+  type CellFieldOptions,
+  type CellSourceOptions,
+  type CellSourceStats,
+  discoverGeoZarrCellFields,
+  type GeoZarrCellField,
+  GeoZarrCellSource,
+  type GeoZarrCellTile,
+  selectCellLevel,
+} from './cell-source.js';
 export { ChunkCache, type ChunkCacheOptions } from './chunk-cache.js';
 export { type ChunkedVolumeOptions, createChunkedVolume } from './chunked-volume.js';
 export type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
