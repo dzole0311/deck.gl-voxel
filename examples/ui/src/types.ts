@@ -3,7 +3,7 @@ import type { ZarrVolume } from 'deck.gl-voxel-zarr';
 
 /** Connects an example's current camera and reader to the shared inspector without owning either. */
 export interface ChunkInspectorView {
-  getReader(): ZarrVolume | undefined;
+  getReader(): Pick<ZarrVolume, 'getDebugState'> | undefined;
   /** Uses exactly the placement and camera transforms supplied to the renderer. */
   getVolumeToClip(geometry: VoxelGeometry): readonly number[] | undefined;
   /** Display placement in the renderer's common space, including vertical exaggeration. */
