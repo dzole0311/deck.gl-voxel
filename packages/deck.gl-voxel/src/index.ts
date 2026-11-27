@@ -17,6 +17,7 @@ export type {
   NormalizedClipBounds,
   RaymarchVoxelLayerProps,
   Vector3,
+  VoxelCellLayerProps,
   VoxelData,
   VoxelDepthSource,
   VoxelGeometry,

@@ -1,5 +1,7 @@
 import type { LayerProps } from '@deck.gl/core';
 import type { Texture } from '@luma.gl/core';
+import type { CellMesh } from './data/cell-mesh.js';
+import type { CellClipBounds } from './geometry/cell-bounds.js';
 
 import type { VoxelLayer } from './voxel-layer.js';
 
@@ -171,3 +173,20 @@ export type RaymarchVoxelLayerProps = LayerProps & {
 
 /** Settings for the existing dense volume renderer. */
 export type VoxelLayerProps = RaymarchVoxelLayerProps;
+
+/** Settings for opaque stock-mesh cells with physical clipping before ground-relative height stretching. */
+export type VoxelCellLayerProps = LayerProps & {
+  /** Prepared cell mesh. The caller retains ownership of its immutable arrays. */
+  readonly mesh: CellMesh;
+  /** One RGBA entry per prepared bin. Output is opaque; pass a new array for changed colors. */
+  readonly palette: Uint8Array;
+  /** Positive vertical stretch relative to each column's ground elevation. @default 1 */
+  readonly exaggeration?: number;
+  /** Bit mask of visible display categories. @default 0xffffffff */
+  readonly visibleBins?: number;
+  readonly renderMode: 'cells';
+  readonly volume?: never;
+  readonly clipBounds?: never;
+  /** Kept common-XY and physical-meter-Z bounds. Infinities leave axes unbounded. */
+  readonly physicalClipBounds?: CellClipBounds;
+};
