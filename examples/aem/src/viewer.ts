@@ -1,11 +1,12 @@
 import { Deck, type Layer, MapView, type MapViewState, type Viewport } from '@deck.gl/core';
 import type { ChunkInspectorView } from '@deck.gl-voxel/example-ui';
 import { webgpuAdapter } from '@luma.gl/webgpu';
-import { Matrix4 } from '@math.gl/core';
+import { Matrix4, Vector4 } from '@math.gl/core';
 import { lngLatToWorld, unitsPerMeter } from '@math.gl/web-mercator';
 import {
   type CellClipBounds,
   type CellHit,
+  displayElevation,
   getCellPickingRay,
   pickCellCollection,
   type VoxelGeometry,
@@ -21,6 +22,8 @@ import type { BoreholeLog } from './borehole.js';
 
 /** Ground-relative exaggeration shared by volumes, context and camera focus. */
 export const EXAGGERATION = 20;
+/** CSS-pixel hit radii give mouse and touch wider targets while keeping the drawn lines thin. */
+const BOREHOLE_PICK_RADIUS = { mouse: 12, touch: 22 } as const;
 /** Converts a displayed geographic point with the same latitude-dependent height units as the cell renderer. */
 function contextCommon(position: readonly [number, number, number]): [number, number, number] {
   const xy = lngLatToWorld([position[0], position[1]]);
@@ -28,6 +31,66 @@ function contextCommon(position: readonly [number, number, number]): [number, nu
 }
 function isPosition(value: unknown): value is [number, number, number] {
   return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+}
+
+type ScreenPoint = readonly [number, number, number];
+
+/**
+ * Clips before the perspective divide so lines behind the camera cannot create false click targets.
+ * Keeps all four clip coordinates until clipping is complete, then returns CSS XY and camera depth in [-1, 1].
+ */
+function projectContextSegment(
+  source: readonly [number, number, number],
+  target: readonly [number, number, number],
+  matrix: Matrix4,
+  viewport: Viewport,
+): readonly [ScreenPoint, ScreenPoint] | undefined {
+  const a = new Vector4(...contextCommon(source), 1);
+  const b = new Vector4(...contextCommon(target), 1);
+  matrix.transform(a, a);
+  matrix.transform(b, b);
+  if (![...a, ...b].every(Number.isFinite)) {
+    return undefined;
+  }
+  const planes: readonly (readonly [number, number])[] = [
+    [a.w + a.x, b.w + b.x],
+    [a.w - a.x, b.w - b.x],
+    [a.w + a.y, b.w + b.y],
+    [a.w - a.y, b.w - b.y],
+    [a.w + a.z, b.w + b.z],
+    [a.w - a.z, b.w - b.z],
+  ];
+  let start = 0;
+  let end = 1;
+  const clipTolerance = Number.EPSILON * 8 * Math.max(1, Math.abs(a.w), Math.abs(b.w));
+  for (const [rawFrom, rawTo] of planes) {
+    const from = Math.abs(rawFrom) <= clipTolerance ? 0 : rawFrom;
+    const to = Math.abs(rawTo) <= clipTolerance ? 0 : rawTo;
+    if (from < 0 && to < 0) {
+      return undefined;
+    }
+    if (from < 0) {
+      start = Math.max(start, from / (from - to));
+    } else if (to < 0) {
+      end = Math.min(end, from / (from - to));
+    }
+  }
+  if (start > end) {
+    return undefined;
+  }
+  const project = (fraction: number): ScreenPoint | undefined => {
+    const point = new Vector4(a).lerp(b, fraction);
+    return point.w > 0
+      ? [
+          ((point.x / point.w + 1) * viewport.width) / 2,
+          ((1 - point.y / point.w) * viewport.height) / 2,
+          point.z / point.w,
+        ]
+      : undefined;
+  };
+  const first = project(start);
+  const last = project(end);
+  return first && last ? [first, last] : undefined;
 }
 export const SOURCE_URL: string | undefined = import.meta.env.VITE_AEM_ZARR_URL;
 export const INITIAL_VIEW: MapViewState = {
@@ -146,29 +209,14 @@ export class AemViewer implements ChunkInspectorView {
         this.hoveredCell = hit ? { x, y } : undefined;
         onHover(hit ? { x, y, ...hit } : undefined);
       },
-      onClick: ({ x, y, object, layer }) => {
+      onClick: ({ x, y }, event) => {
         if (document.elementFromPoint(x, y) !== this.canvas) {
           return;
         }
-        const segment: unknown = object;
-        if (
-          layer?.id !== 'aem-borehole-intervals' ||
-          !segment ||
-          typeof segment !== 'object' ||
-          !('boreholeId' in segment) ||
-          typeof segment.boreholeId !== 'string' ||
-          !('source' in segment) ||
-          !('target' in segment) ||
-          !isPosition(segment.source) ||
-          !isPosition(segment.target)
-        ) {
-          return;
-        }
-        const borehole = this.boreholes.get(segment.boreholeId);
-        if (
-          borehole &&
-          this.contextInFront(segment.source, segment.target, [x, y], this.pick(x, y)?.hit)
-        ) {
+        const radius =
+          event.pointerType === 'touch' ? BOREHOLE_PICK_RADIUS.touch : BOREHOLE_PICK_RADIUS.mouse;
+        const borehole = this.pickBorehole(x, y, radius);
+        if (borehole) {
           this.clearHover();
           this.options.onBoreholeClick(borehole);
         }
@@ -383,6 +431,60 @@ export class AemViewer implements ChunkInspectorView {
   }
   private viewport(): Viewport | undefined {
     return this.deck.isInitialized ? this.deck.getViewports()[0] : undefined;
+  }
+  /** Selects nearby visible intervals without widening their lines or relying on an exact GPU hit. */
+  private pickBorehole(x: number, y: number, radius: number): BoreholeLog | undefined {
+    const viewport = this.viewport();
+    if (!viewport || !this.boreholes.size) {
+      return undefined;
+    }
+    const matrix = new Matrix4(viewport.viewProjectionMatrix);
+    const candidates: { borehole: BoreholeLog; point: ScreenPoint; distanceSquared: number }[] = [];
+    for (const borehole of this.boreholes.values()) {
+      const position = (depth: number): [number, number, number] => [
+        borehole.longitude,
+        borehole.latitude,
+        displayElevation(borehole.groundElevation - depth, borehole.groundElevation, EXAGGERATION),
+      ];
+      for (const interval of borehole.intervals) {
+        const segment = projectContextSegment(
+          position(interval.top),
+          position(interval.bottom),
+          matrix,
+          viewport,
+        );
+        if (!segment) {
+          continue;
+        }
+        const [a, b] = segment;
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+        const lengthSquared = dx * dx + dy * dy;
+        const fraction = lengthSquared
+          ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / lengthSquared))
+          : a[2] <= b[2]
+            ? 0
+            : 1;
+        const point: ScreenPoint = [
+          a[0] + fraction * dx,
+          a[1] + fraction * dy,
+          a[2] + fraction * (b[2] - a[2]),
+        ];
+        const distanceSquared = (x - point[0]) ** 2 + (y - point[1]) ** 2;
+        if (distanceSquared <= radius * radius) {
+          candidates.push({ borehole, point, distanceSquared });
+        }
+      }
+    }
+    candidates.sort((a, b) => a.distanceSquared - b.distanceSquared || a.point[2] - b.point[2]);
+    for (const { borehole, point } of candidates) {
+      const hit = this.pick(point[0], point[1])?.hit;
+      const opaque = hit ? matrix.transformAsPoint(hit.position) : undefined;
+      if (!opaque || point[2] <= (opaque[2] ?? 0) + 1e-7) {
+        return borehole;
+      }
+    }
+    return undefined;
   }
   private contextInFront(
     source: [number, number, number],

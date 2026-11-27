@@ -176,7 +176,7 @@ async function readLogGroup(index: LogIndex, group: LogGroup): Promise<readonly 
   return rows;
 }
 
-/** Expects longitude, latitude and displayed-meter elevations, which LineLayer projects itself. */
+/** Positions use longitude, latitude and displayed meters; buffered widths avoid unsupported WebGPU constants. */
 function segmentsLayer(id: string, data: readonly Segment[], width: number): LineLayer<Segment> {
   return new LineLayer<Segment>({
     id,
@@ -186,7 +186,7 @@ function segmentsLayer(id: string, data: readonly Segment[], width: number): Lin
     getSourcePosition: (d) => d.source,
     getTargetPosition: (d) => d.target,
     getColor: (d) => d.color,
-    getWidth: width,
+    getWidth: () => width,
     widthUnits: 'pixels',
     parameters: {
       depthWriteEnabled: true,
