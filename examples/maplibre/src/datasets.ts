@@ -1,4 +1,4 @@
-import type { ZarrLayerSourceOptions, ZarrVoxelLayerProps } from 'deck.gl-voxel-zarr';
+import type { ZarrVolumeSourceOptions, ZarrVoxelLayerProps } from 'deck.gl-voxel-zarr';
 
 /** Where to load the data and how to show it on the map. */
 export interface Dataset {
@@ -16,7 +16,7 @@ export interface Dataset {
   readonly volumeSource: ZarrVoxelLayerProps['source'];
 
   /** Field and geometry selection for a URL-backed Zarr source. */
-  readonly sourceOptions?: ZarrLayerSourceOptions;
+  readonly sourceOptions?: ZarrVolumeSourceOptions;
 
   /** Initial map center as longitude and latitude in degrees. */
   readonly center: [number, number];

@@ -9,16 +9,23 @@ const sourceOptions = {
   layout: { axes: ['time', 'z', 'y', 'x'], origin: [0, 0, 0], spacing: [1, 1, 1] },
 };
 
-/** Exercises the loading lifecycle without allocating GPU resources. */
+/**
+ * Mounts the public facade's loading child without allocating GPU resources.
+ * Its parent remains the public layer so request hooks see the same layer type as a real Deck scene.
+ */
 function mount(props, viewport) {
-  const layer = new ZarrVoxelLayer({
+  const facade = new ZarrVoxelLayer({
     id: 'volume',
     source: 'https://zarr.invalid',
     sourceOptions,
     ...props,
   });
+  facade.getCurrentLayer = () => facade;
+  const layer = facade.renderLayers();
+  layer.parent = facade;
   if (viewport) {
     layer.context = { viewport };
+    facade.context = layer.context;
   }
   layer.setState = (update) => {
     layer.state = { ...layer.state, ...update };
@@ -29,9 +36,16 @@ function mount(props, viewport) {
   return layer;
 }
 
+/** Transfers loading state and current-layer links through both facade and child, as Deck does. */
 function update(layer, props, changeFlags = {}) {
   const oldProps = layer.props;
-  const next = layer.clone(props);
+  const facade = layer.parent;
+  const nextFacade = facade.clone(props);
+  nextFacade.getCurrentLayer = () => nextFacade;
+  facade.getCurrentLayer = () => nextFacade.getCurrentLayer();
+  nextFacade.context = layer.context;
+  const next = nextFacade.renderLayers();
+  next.parent = nextFacade;
   next.state = layer.state;
   next.context = layer.context;
   next.setState = (state) => {
@@ -43,6 +57,7 @@ function update(layer, props, changeFlags = {}) {
   return next;
 }
 
+/** Defers chunks without honoring cancellation, so stale-result rejection is exercised by the layer. */
 function serve(context) {
   const pending = [];
   const requests = [];
@@ -63,7 +78,6 @@ function serve(context) {
       });
     }
     if (path.startsWith('/c/')) {
-      // Deliberately ignore cancellation to verify stale results are rejected by the layer.
       return new Promise((resolve) => pending.push({ request, resolve }));
     }
     return new Response(null, { status: 404 });
@@ -113,7 +127,7 @@ test('frame changes cancel stale reads, preserve the reader and forward style wi
   assert.equal(child.props.showBounds, true);
   assert.equal(child.props.volume, layer.state.volume);
   assert.equal(child.renderLayers().props.parameters.blendColorSrcFactor, 'one');
-  assert.equal(child.id, 'volume-volume');
+  assert.equal(child.id, 'volume-frames-volume');
   assert.equal(requests.filter((path) => path === '/zarr.json').length, 1);
   assert.equal(pending.length, 2);
   layer.finalizeState();

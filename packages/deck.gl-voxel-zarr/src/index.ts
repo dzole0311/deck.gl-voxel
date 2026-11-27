@@ -21,11 +21,13 @@ export {
 } from './readers/zarr-volume.js';
 export type { ZarrStoreInput } from './storage/zarr-store.js';
 export {
+  type ZarrCollectionSource,
+  type ZarrCollectionSourceOptions,
   type ZarrFetch,
   type ZarrFetchContext,
-  type ZarrLayerSourceOptions,
   type ZarrLoadOptions,
   type ZarrSourceContext,
+  type ZarrVolumeSourceOptions,
   ZarrVoxelLayer,
   type ZarrVoxelLayerProps,
 } from './zarr-voxel-layer.js';
