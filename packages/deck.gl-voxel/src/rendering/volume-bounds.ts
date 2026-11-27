@@ -1,7 +1,7 @@
 import { Buffer, type Device } from '@luma.gl/core';
 import { Model } from '@luma.gl/engine';
 import { voxelBoundsShader } from './shaders/voxel-bounds.wgsl.js';
-import { BOUNDS_UNIFORM_BYTES } from './voxel-uniforms.js';
+import { BOUNDS_UNIFORM_BYTES } from './volume-uniforms.js';
 
 /** GPU objects owned by one VoxelLayer instance while its bounds are visible. */
 export interface VoxelBoundsResources {

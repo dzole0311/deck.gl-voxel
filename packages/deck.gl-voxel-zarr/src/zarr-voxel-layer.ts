@@ -7,9 +7,9 @@ import {
 import { Matrix4 } from '@math.gl/core';
 import {
   getVoxelVolumeToCommon,
+  type RaymarchVoxelLayerProps,
   type VoxelData,
   VoxelLayer,
-  type VoxelLayerProps,
 } from 'deck.gl-voxel';
 import { FrameCache } from './frame-cache.js';
 import { BACKGROUND_PRIORITY } from './request-priority.js';
@@ -55,7 +55,10 @@ export interface ZarrSourceContext {
 }
 
 /** Render settings for a URL-backed volume. Equivalent sourceOptions preserve the opened reader. */
-export type ZarrVoxelLayerProps = Omit<VoxelLayerProps, 'volume' | 'fetch' | 'loadOptions'> & {
+export type ZarrVoxelLayerProps = Omit<
+  RaymarchVoxelLayerProps,
+  'volume' | 'fetch' | 'loadOptions'
+> & {
   /**
    * HTTP(S) store root or a function that opens a custom field
    * The layer supplies a cancellation signal and cache limits
@@ -180,7 +183,8 @@ const fetchZarrRequest: ZarrFetch = (url, { request }) =>
 export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
   static override layerName = 'ZarrVoxelLayer';
   static override defaultProps: DefaultProps<ZarrVoxelLayerProps> = {
-    ...VoxelLayer.defaultProps,
+    coordinateSystem: 'cartesian',
+    renderMode: 'volume',
     source: '',
     sourceOptions: { type: 'object', value: { field: '.' }, equal: equalOptions },
     fetch: { type: 'function', value: fetchZarrRequest, compare: true },
@@ -568,7 +572,7 @@ export class ZarrVoxelLayer extends CompositeLayer<ZarrVoxelLayerProps> {
       onLoadStateChange: _onLoadStateChange,
       ...style
     } = this.props;
-    return new VoxelLayer(style, this.getSubLayerProps({ id: 'volume' }), { volume });
+    return new VoxelLayer({ ...style, ...this.getSubLayerProps({ id: 'volume' }), volume });
   }
 
   override finalizeState(): void {

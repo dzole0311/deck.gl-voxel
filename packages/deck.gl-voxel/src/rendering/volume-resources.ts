@@ -1,9 +1,9 @@
 import { Buffer, type Device, Texture } from '@luma.gl/core';
 import { Model } from '@luma.gl/engine';
+import type { RaymarchVoxelLayerProps, VoxelData } from '../types.js';
 import { voxelShader } from './shaders/voxel.wgsl.js';
-import type { VoxelData, VoxelLayerProps } from './types.js';
-import { packVolume } from './volume.js';
-import { VOXEL_UNIFORM_BYTES } from './voxel-uniforms.js';
+import { packVolume } from './volume-input.js';
+import { VOXEL_UNIFORM_BYTES } from './volume-uniforms.js';
 
 /** GPU objects owned by one VoxelLayer instance. */
 export interface VoxelResources {
@@ -43,7 +43,7 @@ export interface VoxelResources {
  */
 export function createVoxelResources(
   device: Device,
-  props: VoxelLayerProps,
+  props: RaymarchVoxelLayerProps,
   transferFunction: Uint8Array,
 ): VoxelResources {
   const owned: { destroy(): void }[] = [];

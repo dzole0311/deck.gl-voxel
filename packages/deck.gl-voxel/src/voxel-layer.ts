@@ -1,256 +1,85 @@
-import { type DefaultProps, Layer, type LayerContext, type UpdateParameters } from '@deck.gl/core';
-import { type RenderPass, Texture } from '@luma.gl/core';
-import type { Model } from '@luma.gl/engine';
-import type { VoxelData, VoxelLayerProps } from './types.js';
-import {
-  DEFAULT_MAX_TEXTURE_BYTES,
-  DEFAULT_TRANSFER_FUNCTION,
-  validateStyle,
-  validateVolume,
-} from './volume.js';
-import {
-  createVoxelBounds,
-  destroyVoxelBounds,
-  type VoxelBoundsResources,
-} from './voxel-bounds.js';
-import {
-  createVoxelResources,
-  destroyVoxelResources,
-  updateTransferTexture,
-  type VoxelResources,
-} from './voxel-resources.js';
-import { BOUNDS_OFFSETS, createVoxelUniforms } from './voxel-uniforms.js';
+import { CompositeLayer, type DefaultProps } from '@deck.gl/core';
+import { CellLayer } from './rendering/cell-layer.js';
+import { RaymarchVoxelLayer } from './rendering/raymarch-layer.js';
+import type { RaymarchVoxelLayerProps, VoxelCellLayerProps, VoxelLayerProps } from './types.js';
 
-/**
- * Blend the volume over what's already drawn. The shader has already multiplied its RGB by alpha.
- * Keep existing depth because a volume pixel can combine samples from several distances.
- */
-const defaultProps: DefaultProps<VoxelLayerProps> = {
+type SharedDefaults = {
+  coordinateSystem: VoxelLayerProps['coordinateSystem'];
+  renderMode: VoxelLayerProps['renderMode'];
+  valueRange: RaymarchVoxelLayerProps['valueRange'];
+  clipBounds: RaymarchVoxelLayerProps['clipBounds'];
+  physicalClipBounds: VoxelCellLayerProps['physicalClipBounds'];
+};
+
+/** Common defaults leave renderer-specific clipping and GPU settings to the selected child. */
+const defaultProps: DefaultProps<SharedDefaults> = {
   coordinateSystem: 'cartesian',
-  valueRange: { type: 'array', value: [0, 1], compare: true },
-  clipBounds: { type: 'array', value: [0, 0, 0, 1, 1, 1], compare: true },
-  stepSize: 0.5,
-  maxSteps: 2048,
-  density: 1,
-  showBounds: false,
-  sampling: 'linear',
-  colorBy: 'value',
   renderMode: 'volume',
-  isovalue: 0.5,
-  maxTextureBytes: DEFAULT_MAX_TEXTURE_BYTES,
-  parameters: {
-    depthWriteEnabled: false,
-    depthCompare: 'always',
-    blendColorOperation: 'add',
-    blendColorSrcFactor: 'one',
-    blendColorDstFactor: 'one-minus-src-alpha',
-    blendAlphaOperation: 'add',
-    blendAlphaSrcFactor: 'one',
-    blendAlphaDstFactor: 'one-minus-src-alpha',
-  },
+  valueRange: { type: 'array', value: undefined, optional: true, compare: true },
+  clipBounds: { type: 'array', value: undefined, optional: true, compare: true },
+  physicalClipBounds: { type: 'array', value: undefined, optional: true, compare: true },
 };
 
 /**
- * Draws a 3D grid on WebGPU by sampling along a camera ray for each pixel.
- * Draw after opaque scene layers. Pass positions in deck.gl's shared Cartesian coordinates or
- * as meter offsets from a map location given by coordinateOrigin.
- * The layer owns the textures it uploads. The caller keeps ownership of the input array
- * and the depth source keeps ownership of the optional depth texture.
- * Pass a new {@link VoxelData} object to upload new values or geometry.
- *
- * @see https://deck.gl/docs/developer-guide/webgpu
- * @see https://deck.gl/docs/developer-guide/custom-layers/layer-lifecycle
+ * Draws a dense grid as a translucent volume or isosurface or a prepared mesh as opaque cells.
+ * The default volume mode requires volume; cells mode requires mesh and palette.
+ * Dense clipBounds are normalized fractions. Cells use physicalClipBounds in common XY and physical-meter Z.
+ * Input arrays remain caller-owned. Renderer children own and release their GPU resources.
+ * Switching to a new complete props object with the same layer ID retires the previous renderer.
+ * Camera and style updates preserve unchanged data and the selected renderer's resource caches.
  *
  * @example
- * const layer = new VoxelLayer({
+ * new VoxelLayer({
  *   id: 'density',
  *   volume: { values: new Float32Array(8).fill(0.5), dimensions: [2, 2, 2] },
- *   valueRange: [0, 1],
  * });
  */
-export class VoxelLayer extends Layer<VoxelLayerProps> {
+export class VoxelLayer extends CompositeLayer<VoxelLayerProps> {
   static override layerName = 'VoxelLayer';
-
   static override defaultProps = defaultProps;
 
-  /** A failed update keeps the layer hidden until its resources match the current props. */
-  declare state: {
-    resources: VoxelResources | null;
-    bounds: VoxelBoundsResources | null;
-    ready: boolean;
-  };
-
-  /**
-   * Sets up the layer without allocating textures until the grid is validated.
-   *
-   * @throws {Error} If deck.gl was initialized with a non-WebGPU backend.
-   */
-  override initializeState(): void {
-    if (this.context.device.type !== 'webgpu') {
-      throw new Error('VoxelLayer requires a WebGPU device.');
-    }
-
-    this.setState({ resources: null, bounds: null, ready: false });
-    this.getAttributeManager()?.remove(['instancePickingColors']);
+  /** Accepts one complete mode-specific configuration; use a fresh object when switching renderers. */
+  constructor(props: VoxelLayerProps) {
+    super({ ...props, pickable: props.pickable ?? props.renderMode === 'cells' });
   }
 
-  /** Uses its own shader with camera and style settings supplied by createVoxelUniforms. */
-  override setShaderModuleProps(): void {}
-
-  /**
-   * Gives deck.gl the draw models so it can update render settings and schedule redraws.
-   *
-   * @returns The current draw models, or an empty array before allocation.
-   */
-  override getModels(): Model[] {
-    const resources = this.state?.resources;
-    const bounds = this.state?.bounds;
-
-    if (!resources) {
-      return [];
-    }
-
-    return bounds ? [resources.model, bounds.model] : [resources.model];
+  /** Returns the displayed cell envelope without allocating a device; dense grids return null. */
+  override getBounds(): [number[], number[]] | null {
+    return this.props.renderMode === 'cells' ? (this.renderLayers().getBounds() ?? null) : null;
   }
 
-  /**
-   * Checks the options and uploads the grid or color ramp when the corresponding object changes.
-   * Frees the old grid texture before uploading a replacement to save GPU memory.
-   * Keeps the bounds model across frames and releases it when the outline is turned off.
-   * @param update - Current layer props from the deck.gl lifecycle.
-   * @throws {Error} If validation, allocation, or upload fails.
-   */
-  override updateState({ props }: UpdateParameters<this>): void {
-    this.setState({ ready: false });
-    validateStyle(props);
-
-    const device = this.context.device;
-    const transferFunction = props.transferFunction ?? DEFAULT_TRANSFER_FUNCTION;
-
-    if (transferFunction.length / 4 > device.limits.maxTextureDimension2D) {
-      throw new Error('Transfer function exceeds the device texture limit.');
+  /** Creates only the selected renderer; dense mode changes share a child ID to retain uploaded textures. */
+  override renderLayers(): CellLayer | RaymarchVoxelLayer {
+    const props = this.props;
+    if (props.renderMode === 'cells') {
+      if (!props.mesh || !(props.palette instanceof Uint8Array) || props.volume !== undefined) {
+        throw new Error('Cells mode requires a prepared mesh and palette, without a dense volume.');
+      }
+      if (props.clipBounds !== undefined) {
+        throw new Error(
+          'Cells mode uses physicalClipBounds; clipBounds is reserved for dense grids.',
+        );
+      }
+      const { renderMode: _renderMode, physicalClipBounds, ...cells } = props;
+      const child = this.getSubLayerProps({ id: 'cells' });
+      return new CellLayer(cells, child, {
+        parameters: { ...CellLayer.defaultProps.parameters, ...child.parameters },
+        ...(physicalClipBounds ? { clipBounds: physicalClipBounds } : {}),
+      });
     }
-
-    validateVolume(
-      props.volume,
-      device.limits.maxTextureDimension3D,
-      props.maxTextureBytes ?? DEFAULT_MAX_TEXTURE_BYTES,
-      transferFunction.byteLength,
-    );
-
-    if (!this.state.resources || props.volume !== this.state.resources.volumeData) {
-      this.releaseResources();
-      this.setState({ resources: createVoxelResources(device, props, transferFunction) });
-    } else if (transferFunction !== this.state.resources.transferData) {
-      updateTransferTexture(device, this.state.resources, transferFunction, props.id);
+    if (props.renderMode !== 'volume' && props.renderMode !== 'isosurface') {
+      throw new Error('renderMode must be volume, isosurface or cells.');
     }
-
-    if (props.showBounds && !this.state.bounds) {
-      this.setState({ bounds: createVoxelBounds(device, props.id) });
-    } else if (!props.showBounds && this.state.bounds) {
-      this.releaseBounds();
-    }
-
-    this.setState({ ready: true });
-  }
-
-  /**
-   * Sends this view's settings to the GPU and draws into the canvas via deck.gl's render pass.
-   * Draws the dashed rear edges first so the volume can cover them, then draws the solid
-   * front edges over the volume.
-   *
-   * @param options - Draw parameters supplied by deck.gl.
-   * @param options.renderPass - Where the draw commands go. deck.gl finishes the pass
-   * and submits the commands to the GPU.
-   * @throws {Error} If the view can't place the grid or the scene depth texture is incompatible.
-   */
-  override draw({ renderPass }: { renderPass: RenderPass }): void {
-    const resources = this.state.resources;
-    const canvas = this.context.device.canvasContext;
-
-    if (!resources || !this.state.ready || !canvas) {
-      return;
-    }
-
-    const viewport = this.context.viewport;
-    const canvasSize = canvas.getDrawingBufferSize();
-    const [cssWidth] = canvas.getCSSSize();
-    const pixelRatio = cssWidth ? canvasSize[0] / cssWidth : 1;
-    const depth = this.props.depthSource?.getDepthTexture(viewport.id);
-
     if (
-      depth &&
-      (depth.destroyed ||
-        depth.device !== this.context.device ||
-        depth.width !== canvasSize[0] ||
-        depth.height !== canvasSize[1] ||
-        depth.dimension !== '2d' ||
-        depth.format !== 'depth32float' ||
-        !((depth.props.usage ?? 0) & Texture.SAMPLE))
+      props.mesh !== undefined ||
+      props.palette !== undefined ||
+      props.physicalClipBounds !== undefined
     ) {
-      throw new Error(
-        'Scene depth must be a sampleable, full-canvas depth32float texture on the same device.',
-      );
+      throw new Error('Dense modes use volume and normalized clipBounds, without cell inputs.');
     }
-
-    const uniforms = createVoxelUniforms(
-      this.props,
-      viewport,
-      canvasSize,
-      pixelRatio,
-      Boolean(depth),
-    );
-
-    const bounds = this.state.bounds;
-
-    if (bounds && uniforms.bounds) {
-      bounds.front.write(uniforms.bounds);
-      uniforms.bounds[BOUNDS_OFFSETS.rearPass] = 1;
-      bounds.rear.write(uniforms.bounds);
-      bounds.model.setBindings({ outline: bounds.rear });
-      bounds.model.draw(renderPass);
-    }
-
-    resources.uniforms.write(uniforms.volume);
-    resources.model.setBindings({ sceneDepth: depth ?? resources.emptyDepth });
-    resources.model.draw(renderPass);
-
-    if (bounds && uniforms.bounds) {
-      bounds.model.setBindings({ outline: bounds.front });
-      bounds.model.draw(renderPass);
-    }
-  }
-
-  /**
-   * Releases owned GPU objects before deck.gl disposes its remaining layer state.
-   *
-   * @param context - Framework context passed to the base layer cleanup.
-   */
-  override finalizeState(context: LayerContext): void {
-    this.releaseBounds();
-    this.releaseResources();
-    super.finalizeState(context);
-  }
-
-  /** Drops the bounds model reference before freeing its GPU objects. */
-  private releaseBounds(): void {
-    const bounds = this.state.bounds;
-    this.state.bounds = null;
-
-    if (bounds) {
-      destroyVoxelBounds(bounds);
-    }
-  }
-
-  /** Drops the model reference before destroying it so deck.gl won't try to free it again. */
-  private releaseResources(): void {
-    const resources = this.state.resources;
-
-    this.state.resources = null;
-    this.state.ready = false;
-
-    if (resources) {
-      destroyVoxelResources(resources);
-    }
+    const child = this.getSubLayerProps({ id: 'raymarch' });
+    return new RaymarchVoxelLayer(props, child, {
+      parameters: { ...RaymarchVoxelLayer.defaultProps.parameters, ...child.parameters },
+    });
   }
 }

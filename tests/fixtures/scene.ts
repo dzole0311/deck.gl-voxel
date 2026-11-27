@@ -1,10 +1,10 @@
 import { Deck, MapView, OrbitView } from '@deck.gl/core';
 import { webgpuAdapter } from '@luma.gl/webgpu';
-import { VoxelDepthEffect, VoxelLayer } from 'deck.gl-voxel';
+import { prepareCellMesh, VoxelDepthEffect, VoxelLayer } from 'deck.gl-voxel';
 
 import { ZarrVoxelLayer } from '../../packages/deck.gl-voxel-zarr/src/index.js';
 
-import { createFixture, createLut } from './fixtures.js';
+import { createAxisMarkerPalette, createAxisMarkerVolume } from './axis-markers.js';
 import { ObstacleLayer } from './obstacle-layer.js';
 
 const depth = new VoxelDepthEffect({ getLayerFilter: (layer) => layer.id === 'obstacle' });
@@ -31,8 +31,9 @@ Object.assign(window, {
     deck,
     depth,
     errors,
-    createFixture,
-    createLut,
+    createAxisMarkerVolume,
+    createAxisMarkerPalette,
+    prepareCellMesh,
     VoxelLayer,
     ZarrVoxelLayer,
     OrbitView,

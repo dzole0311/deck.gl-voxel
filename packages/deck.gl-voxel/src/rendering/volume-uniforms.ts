@@ -1,7 +1,7 @@
 import type { Viewport } from '@deck.gl/core';
 import { Matrix4 } from '@math.gl/core';
-import type { VoxelGeometry, VoxelLayerProps } from './types.js';
-import { getExtent } from './volume.js';
+import { getExtent, getVoxelVolumeToCommon } from '../geometry/coordinates.js';
+import type { RaymarchVoxelLayerProps } from '../types.js';
 
 /**
  * Where to write each group of settings in the Float32Array. Each index steps four bytes.
@@ -57,6 +57,7 @@ export const BOUNDS_UNIFORM_BYTES = (16 + 4 + 4) * Float32Array.BYTES_PER_ELEMEN
  * even when the grid or display is stretched more along one axis than another.
  * The outline uses the same projection as the volume, in the forward direction.
  * Its camera setting holds either a point (w = 1) or a direction (w = 0) in grid coordinates.
+ * Absorption follows model scale and shear; map projection and zoom do not change its reference distance.
  *
  * @param props - Validated layer options.
  * @param viewport - Active deck.gl viewport.
@@ -68,7 +69,7 @@ export const BOUNDS_UNIFORM_BYTES = (16 + 4 + 4) * Float32Array.BYTES_PER_ELEMEN
  * @see https://pbr-book.org/4ed/Geometry_and_Transformations/Applying_Transformations#Normals
  */
 export function createVoxelUniforms(
-  props: VoxelLayerProps,
+  props: RaymarchVoxelLayerProps,
   viewport: Viewport,
   canvasSize: readonly [number, number],
   pixelRatio: number,
@@ -95,7 +96,7 @@ export function createVoxelUniforms(
   if (props.showBounds) {
     bounds = new Float32Array(BOUNDS_UNIFORM_BYTES / Float32Array.BYTES_PER_ELEMENT);
     bounds.set(volumeToClip, BOUNDS_OFFSETS.volumeToClip);
-    // Perspective projects with clip w = -view z. Orthographic projection keeps w = 1.
+    /** Perspective clip W is minus view Z; orthographic clip W remains one. */
     const perspective = viewport.projectionMatrix[15] === 0;
     const camera = perspective
       ? viewToVolume.transformAsPoint([0, 0, 0])
@@ -112,8 +113,6 @@ export function createVoxelUniforms(
   values.set(volumeToClip.invert(), OFFSETS.clipToVolume);
   values.set(volumeToView, OFFSETS.volumeToView);
   values.set(viewToVolume.transpose(), OFFSETS.normalToView);
-  // Absorption follows the displayed geometry, including nonuniform scale and shear.
-  // Map projection and camera zoom must not change the material's reference distance.
   values.set(
     new Matrix4(props.modelMatrix ?? undefined)
       .setColumn(3, [0, 0, 0, 1])
@@ -158,60 +157,4 @@ export function createVoxelUniforms(
   }
 
   return { volume: values, bounds };
-}
-
-/**
- * Converts positions inside the grid to the same 3D coordinates other deck.gl layers use.
- * The shader expresses each position as a fraction of the grid along X, Y and Z.
- * For example, if X starts at 100 m and spans 20 m, X = 0 means 100 m, X = 0.5
- * means 110 m and X = 1 means 120 m before any display or map transforms.
- * For meter offsets on a map, use the scale at coordinateOrigin for the whole grid.
- *
- * @param props - Grid origin, cell spacing and any placement or display transform.
- * @param viewport - Active view, used to project the map anchor and measure its scale.
- * @returns A matrix that maps the grid box into the same space as other deck.gl layers.
- * @throws {Error} If the coordinate system is unsupported.
- * @see https://deck.gl/docs/developer-guide/coordinate-systems#common-space
- */
-export function getVoxelVolumeToCommon(
-  props: Pick<VoxelLayerProps, 'coordinateSystem' | 'coordinateOrigin' | 'modelMatrix'> & {
-    volume: VoxelGeometry;
-  },
-  viewport: Viewport,
-): Matrix4 {
-  if (viewport.resolution !== undefined) {
-    throw new Error('VoxelLayer does not support GlobeView.');
-  }
-
-  const matrix = new Matrix4();
-  const coordinateOrigin = props.coordinateOrigin ?? [0, 0, 0];
-  const coordinateSystem = props.coordinateSystem ?? 'cartesian';
-
-  if (coordinateSystem === 'meter-offsets') {
-    if (!viewport.isGeospatial) {
-      throw new Error('Meter-offset coordinates require a geospatial viewport.');
-    }
-
-    const anchor = viewport.projectPosition(coordinateOrigin);
-    const distanceScales = viewport.getDistanceScales(coordinateOrigin);
-
-    matrix.translate(anchor).scale(distanceScales.unitsPerMeter);
-  } else if (
-    coordinateSystem === 'cartesian' ||
-    (!viewport.isGeospatial && coordinateSystem === 'default')
-  ) {
-    if (viewport.isGeospatial) {
-      matrix.translate(coordinateOrigin);
-    }
-  } else {
-    throw new Error('VoxelLayer supports cartesian and meter-offsets coordinates.');
-  }
-
-  if (props.modelMatrix) {
-    matrix.multiplyRight(props.modelMatrix);
-  }
-
-  matrix.translate(props.volume.origin ?? [0, 0, 0]).scale(getExtent(props.volume));
-
-  return matrix;
 }

@@ -1,10 +1,15 @@
 import type { LayerProps } from '@deck.gl/core';
 import type { Texture } from '@luma.gl/core';
+import type { CellMesh } from './data/cell-mesh.js';
+import type { CellClipBounds } from './geometry/cell-bounds.js';
 
 import type { VoxelLayer } from './voxel-layer.js';
 
 /** Three coordinates in X, Y, Z order. */
 export type Vector3 = readonly [number, number, number];
+
+/** Kept lower and upper XYZ fractions in grid-index direction from the origin, between 0 and 1. */
+export type NormalizedClipBounds = readonly [number, number, number, number, number, number];
 
 /**
  * A 3D grid with one number per cell for {@link VoxelLayer}.
@@ -49,7 +54,7 @@ export interface VoxelDepthSource {
   /**
    * Gets the full-canvas depth texture for this view. The source still owns it.
    * Each pixel stores how close the nearest opaque object is, in the camera's depth units.
-   * Use the depth convention of deck.gl 9.3's scene shaders.
+   * Values use WebGPU depth in the range 0 (near) to 1 (far).
    *
    * @param viewportId - deck.gl viewport identifier.
    * @returns A depth32float texture the shader can read, or undefined before a capture is ready.
@@ -57,10 +62,13 @@ export interface VoxelDepthSource {
   getDepthTexture(viewportId: string): Texture | undefined;
 }
 
-/** Options for drawing one volume. */
-export type VoxelLayerProps = LayerProps & {
+/** Settings for sampling a dense grid as a translucent volume or isosurface. */
+export type RaymarchVoxelLayerProps = LayerProps & {
   /** Grid values and geometry. The caller loads the data and owns the input array. */
   volume: VoxelData;
+  mesh?: never;
+  palette?: never;
+  physicalClipBounds?: never;
 
   /**
    * For each pixel, the shader follows a line from the camera through the grid.
@@ -90,7 +98,7 @@ export type VoxelLayerProps = LayerProps & {
    * The first group is for the low end of valueRange and the last is for the high end.
    * The shader blends neighboring groups for values in between. Supply RGB as usual
    * and let the shader multiply it by alpha when drawing. Alpha gives the opacity for one
-   * {@link VoxelLayerProps.opacityUnitDistance}. Pass a new Uint8Array to update the colors.
+   * {@link RaymarchVoxelLayerProps.opacityUnitDistance}. Pass a new Uint8Array to update the colors.
    * @default A 256-entry blue-to-orange ramp with increasing alpha
    * @example
    * // Low values are transparent blue and high values are about half-opaque orange.
@@ -147,7 +155,7 @@ export type VoxelLayerProps = LayerProps & {
    * keeps only the first half of the grid along Z. Use valueRange for the data values.
    * @default [0, 0, 0, 1, 1, 1]
    */
-  clipBounds?: readonly [number, number, number, number, number, number];
+  clipBounds?: NormalizedClipBounds;
 
   /**
    * Use the nearest cell or blend nearby cells. Linear sampling skips missing cells
@@ -165,3 +173,23 @@ export type VoxelLayerProps = LayerProps & {
   /** Optional depth from opaque deck.gl layers, used to hide the volume behind those objects. */
   depthSource?: VoxelDepthSource;
 };
+
+/** Settings for opaque stock-mesh cells with physical clipping before ground-relative height stretching. */
+export type VoxelCellLayerProps = LayerProps & {
+  /** Prepared cell mesh. The caller retains ownership of its immutable arrays. */
+  readonly mesh: CellMesh;
+  /** One RGBA entry per prepared bin. Output is opaque; pass a new array for changed colors. */
+  readonly palette: Uint8Array;
+  /** Positive vertical stretch relative to each column's ground elevation. @default 1 */
+  readonly exaggeration?: number;
+  /** Bit mask of visible display categories. @default 0xffffffff */
+  readonly visibleBins?: number;
+  readonly renderMode: 'cells';
+  readonly volume?: never;
+  readonly clipBounds?: never;
+  /** Kept common-XY and physical-meter-Z bounds. Infinities leave axes unbounded. */
+  readonly physicalClipBounds?: CellClipBounds;
+};
+
+/** Select cells with a prepared mesh, or volume and isosurface with a dense grid. */
+export type VoxelLayerProps = RaymarchVoxelLayerProps | VoxelCellLayerProps;

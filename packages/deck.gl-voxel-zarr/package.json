@@ -27,9 +27,9 @@
     "@math.gl/core": "4.1.0"
   },
   "peerDependencies": {
-    "@deck.gl/core": "9.3.12"
+    "@deck.gl/core": "9.4.2"
   },
   "devDependencies": {
-    "@deck.gl/core": "9.3.12"
+    "@deck.gl/core": "9.4.2"
   }
 }

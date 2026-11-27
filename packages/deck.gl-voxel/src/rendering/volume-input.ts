@@ -1,4 +1,5 @@
-import type { Vector3, VoxelData, VoxelLayerProps } from './types.js';
+import { getExtent } from '../geometry/coordinates.js';
+import type { RaymarchVoxelLayerProps, VoxelData } from '../types.js';
 
 /** The layer can keep up to 256 MiB of textures on the GPU by default. */
 export const DEFAULT_MAX_TEXTURE_BYTES = 256 * 1024 * 1024;
@@ -77,7 +78,7 @@ export function validateVolume(
  * @param props - Layer options, including sampling and color settings.
  * @throws {Error} If an option is invalid or requests an unsupported feature.
  */
-export function validateStyle(props: VoxelLayerProps): void {
+export function validateStyle(props: RaymarchVoxelLayerProps): void {
   if (
     props.renderMode !== undefined &&
     props.renderMode !== 'volume' &&
@@ -176,22 +177,6 @@ export function packVolume(volume: VoxelData): Float32Array {
   }
 
   return packed;
-}
-
-/**
- * Multiplies cell counts by spacing to get the full grid size along each axis.
- *
- * @param volume - Grid with optional signed spacing.
- * @returns X, Y and Z distances in layer units, with the sign preserved for flipped axes.
- */
-export function getExtent(volume: Pick<VoxelData, 'dimensions' | 'spacing'>): Vector3 {
-  const spacing = volume.spacing ?? [1, 1, 1];
-
-  return [
-    volume.dimensions[0] * spacing[0],
-    volume.dimensions[1] * spacing[1],
-    volume.dimensions[2] * spacing[2],
-  ];
 }
 
 /**
