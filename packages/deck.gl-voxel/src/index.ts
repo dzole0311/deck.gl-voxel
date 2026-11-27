@@ -12,7 +12,11 @@ export {
   pickCellCollection,
   pickCellMesh,
 } from './geometry/cell-picking.js';
-export { displayElevation, physicalElevation } from './geometry/coordinates.js';
+export {
+  displayElevation,
+  getVoxelVolumeToCommon,
+  physicalElevation,
+} from './geometry/coordinates.js';
 export type {
   NormalizedClipBounds,
   RaymarchVoxelLayerProps,
@@ -23,7 +27,5 @@ export type {
   VoxelGeometry,
   VoxelLayerProps,
 } from './types.js';
-export type { VoxelDepthEffectProps } from './voxel-depth-effect.js';
-export { VoxelDepthEffect } from './voxel-depth-effect.js';
+export { VoxelDepthEffect, type VoxelDepthEffectProps } from './voxel-depth-effect.js';
 export { VoxelLayer } from './voxel-layer.js';
-export { getVoxelVolumeToCommon } from './voxel-uniforms.js';

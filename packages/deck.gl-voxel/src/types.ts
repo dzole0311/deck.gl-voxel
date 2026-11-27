@@ -54,7 +54,7 @@ export interface VoxelDepthSource {
   /**
    * Gets the full-canvas depth texture for this view. The source still owns it.
    * Each pixel stores how close the nearest opaque object is, in the camera's depth units.
-   * Use the depth convention of deck.gl 9.3's scene shaders.
+   * Values use WebGPU depth in the range 0 (near) to 1 (far).
    *
    * @param viewportId - deck.gl viewport identifier.
    * @returns A depth32float texture the shader can read, or undefined before a capture is ready.
@@ -62,10 +62,13 @@ export interface VoxelDepthSource {
   getDepthTexture(viewportId: string): Texture | undefined;
 }
 
-/** Options for drawing one volume. */
+/** Settings for sampling a dense grid as a translucent volume or isosurface. */
 export type RaymarchVoxelLayerProps = LayerProps & {
   /** Grid values and geometry. The caller loads the data and owns the input array. */
   volume: VoxelData;
+  mesh?: never;
+  palette?: never;
+  physicalClipBounds?: never;
 
   /**
    * For each pixel, the shader follows a line from the camera through the grid.
@@ -95,7 +98,7 @@ export type RaymarchVoxelLayerProps = LayerProps & {
    * The first group is for the low end of valueRange and the last is for the high end.
    * The shader blends neighboring groups for values in between. Supply RGB as usual
    * and let the shader multiply it by alpha when drawing. Alpha gives the opacity for one
-   * {@link VoxelLayerProps.opacityUnitDistance}. Pass a new Uint8Array to update the colors.
+   * {@link RaymarchVoxelLayerProps.opacityUnitDistance}. Pass a new Uint8Array to update the colors.
    * @default A 256-entry blue-to-orange ramp with increasing alpha
    * @example
    * // Low values are transparent blue and high values are about half-opaque orange.
@@ -152,7 +155,7 @@ export type RaymarchVoxelLayerProps = LayerProps & {
    * keeps only the first half of the grid along Z. Use valueRange for the data values.
    * @default [0, 0, 0, 1, 1, 1]
    */
-  clipBounds?: readonly [number, number, number, number, number, number];
+  clipBounds?: NormalizedClipBounds;
 
   /**
    * Use the nearest cell or blend nearby cells. Linear sampling skips missing cells
@@ -171,9 +174,6 @@ export type RaymarchVoxelLayerProps = LayerProps & {
   depthSource?: VoxelDepthSource;
 };
 
-/** Settings for the existing dense volume renderer. */
-export type VoxelLayerProps = RaymarchVoxelLayerProps;
-
 /** Settings for opaque stock-mesh cells with physical clipping before ground-relative height stretching. */
 export type VoxelCellLayerProps = LayerProps & {
   /** Prepared cell mesh. The caller retains ownership of its immutable arrays. */
@@ -190,3 +190,6 @@ export type VoxelCellLayerProps = LayerProps & {
   /** Kept common-XY and physical-meter-Z bounds. Infinities leave axes unbounded. */
   readonly physicalClipBounds?: CellClipBounds;
 };
+
+/** Select cells with a prepared mesh, or volume and isosurface with a dense grid. */
+export type VoxelLayerProps = RaymarchVoxelLayerProps | VoxelCellLayerProps;

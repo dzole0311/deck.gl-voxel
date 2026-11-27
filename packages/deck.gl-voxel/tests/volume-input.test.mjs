@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { packVolume, validateStyle, validateVolume } from '../dist/volume.js';
+import { packVolume, validateStyle, validateVolume } from '../dist/rendering/volume-input.js';
 
 const grid = {
   values: new Float32Array([1, Number.NaN, -9999, Infinity]),

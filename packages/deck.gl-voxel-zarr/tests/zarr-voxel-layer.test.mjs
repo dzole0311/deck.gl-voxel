@@ -112,7 +112,7 @@ test('frame changes cancel stale reads, preserve the reader and forward style wi
   assert.equal(child.props.density, 2);
   assert.equal(child.props.showBounds, true);
   assert.equal(child.props.volume, layer.state.volume);
-  assert.equal(child.props.parameters.blendColorSrcFactor, 'one');
+  assert.equal(child.renderLayers().props.parameters.blendColorSrcFactor, 'one');
   assert.equal(child.id, 'volume-volume');
   assert.equal(requests.filter((path) => path === '/zarr.json').length, 1);
   assert.equal(pending.length, 2);

@@ -2,7 +2,7 @@
  * Draws the twelve edges of the full grid. The grid's corners are fractions along
  * each axis, from 0 to 1, and use the same camera transform as the volume.
  * The binding slot matches the one set in createVoxelBounds. The shader reads
- * its settings at the offsets written by {@link import('../voxel-uniforms.js').createVoxelUniforms}.
+ * its settings at the offsets written by {@link import('../uniforms.js').createVoxelUniforms}.
  * @see https://www.w3.org/TR/WGSL/#memory-layout
  */
 export const voxelBoundsShader = /* wgsl */ `

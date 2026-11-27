@@ -5,7 +5,7 @@
  * Each binding is a numbered slot for a GPU buffer or texture. The slots here match the
  * ones set in createVoxelResources, where TypeScript supplies the actual GPU objects.
  * The shader reads camera and style settings at the offsets written by
- * {@link import('../voxel-uniforms.js').createVoxelUniforms}.
+ * {@link import('../uniforms.js').createVoxelUniforms}.
  * @see https://www.w3.org/TR/WGSL/#memory-layout
  */
 export const voxelShader = /* wgsl */ `

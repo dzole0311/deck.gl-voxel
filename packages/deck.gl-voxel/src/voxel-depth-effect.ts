@@ -7,8 +7,8 @@ import {
   type Viewport,
 } from '@deck.gl/core';
 import { type Device, type Framebuffer, type Parameters, Texture } from '@luma.gl/core';
+import { RaymarchVoxelLayer } from './rendering/raymarch-layer.js';
 import type { VoxelDepthSource } from './types.js';
-import { VoxelLayer } from './voxel-layer.js';
 
 /** Each pixel needs four bytes for depth and four for color. */
 const BYTES_PER_CAPTURE_PIXEL = 8;
@@ -47,13 +47,13 @@ interface Capture {
  * Draws selected solid deck.gl layers into an offscreen texture before the visible scene.
  * Each pixel records the nearest solid object. The volume shader stops at that depth, so a
  * building or terrain can hide samples behind it.
- * The capture uses deck.gl 9.3's experimental _LayersPass and only sees layers drawn in this pass.
+ * The capture uses deck.gl 9.4's experimental _LayersPass and only sees layers drawn in this pass.
+ * Supply the effect in Deck.effects and draw the volume after opaque scene layers.
  *
  * @example
  * const volume = { values: new Float32Array(8).fill(0.5), dimensions: [2, 2, 2] as const };
  * const depth = new VoxelDepthEffect({ getLayerFilter: layer => layer.id === 'terrain' });
  * const layer = new VoxelLayer({ id: 'density', volume, depthSource: depth });
- * // Supply depth in Deck.effects and draw layer after the opaque scene layers.
  */
 export class VoxelDepthEffect implements Effect, VoxelDepthSource {
   /** Identifier used by deck.gl's effect manager. */
@@ -237,13 +237,13 @@ class OpaqueCapturePass extends _LayersPass {
   }
 
   /**
-   * Checks the filter for drawable layers other than VoxelLayer.
+   * Checks the filter for drawable layers other than the raymarch renderer.
    *
    * @param layer - Layer under consideration, including composite layers that wrap other layers.
    * @returns Whether this layer should write the capture.
    */
   override shouldDrawLayer(layer: Layer): boolean {
-    return !layer.isComposite && !(layer instanceof VoxelLayer) && this.filter(layer);
+    return !layer.isComposite && !(layer instanceof RaymarchVoxelLayer) && this.filter(layer);
   }
 
   /**
