@@ -6,6 +6,9 @@ import type { VoxelLayer } from './voxel-layer.js';
 /** Three coordinates in X, Y, Z order. */
 export type Vector3 = readonly [number, number, number];
 
+/** Kept lower and upper XYZ fractions in grid-index direction from the origin, between 0 and 1. */
+export type NormalizedClipBounds = readonly [number, number, number, number, number, number];
+
 /**
  * A 3D grid with one number per cell for {@link VoxelLayer}.
  * Pass a new grid object when the values or geometry change.
@@ -58,7 +61,7 @@ export interface VoxelDepthSource {
 }
 
 /** Options for drawing one volume. */
-export type VoxelLayerProps = LayerProps & {
+export type RaymarchVoxelLayerProps = LayerProps & {
   /** Grid values and geometry. The caller loads the data and owns the input array. */
   volume: VoxelData;
 
@@ -165,3 +168,6 @@ export type VoxelLayerProps = LayerProps & {
   /** Optional depth from opaque deck.gl layers, used to hide the volume behind those objects. */
   depthSource?: VoxelDepthSource;
 };
+
+/** Settings for the existing dense volume renderer. */
+export type VoxelLayerProps = RaymarchVoxelLayerProps;
