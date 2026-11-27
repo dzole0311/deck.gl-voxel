@@ -1,14 +1,7 @@
-# deck.gl-voxel
+Render volumetric (Geo)Zarr data directly in the browser with deck.gl and WebGPU and keep numeric values available for interaction.
 
-Experimental deck.gl layer for visualizing volumetric data with WebGPU. It supports volume rendering and isosurfaces.
-
-Earlier example using `SimpleMeshLayer` and `CubeGeometry` in [deck.gl-voxel-prototype](https://github.com/dzole0311/deck.gl-voxel-prototype).
-
-## Run the example
-
-The [MapLibre example](examples/maplibre/README.md) shows cloud cover (generated from ERA5) and wind speed over time fetched from dynamica.org.
-
-Note: Use Node.js 22.13 or later in the 22.x series or Node.js 23.5 or later. The example requires a browser with WebGPU.
+> [!NOTE]
+> The API is still experimental and may change.
 
 ```sh
 pnpm install

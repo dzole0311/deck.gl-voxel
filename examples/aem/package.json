@@ -1,0 +1,30 @@
+{
+  "name": "voxel-aem-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5176",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@deck.gl/core": "9.4.2",
+    "@luma.gl/webgpu": "9.4.2",
+    "@math.gl/core": "4.1.0",
+    "deck.gl-voxel": "workspace:*",
+    "deck.gl-voxel-zarr": "workspace:*",
+    "maplibre-gl": "6.17.0",
+    "@deck.gl-voxel/example-ui": "workspace:*",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "@deck.gl/layers": "9.4.2",
+    "@math.gl/web-mercator": "4.1.0",
+    "hyparquet": "1.25.5",
+    "fzstd": "0.1.1"
+  },
+  "devDependencies": {
+    "vite": "8.3.7",
+    "@tailwindcss/vite": "4.3.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
+  }
+}
