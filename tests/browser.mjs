@@ -27,9 +27,26 @@ const browser = await chromium
 const page = await browser.newPage({ viewport: { width: 400, height: 400 }, deviceScaleFactor: 1 });
 const errors = [];
 
+await page.addInitScript(() => {
+  window.voxelRaymarchResources = (layer) => {
+    if (!layer) {
+      return undefined;
+    }
+    if (!layer.isComposite) {
+      return layer.props.volume ? layer.state.resources : undefined;
+    }
+    for (const child of layer.getSubLayers()) {
+      const resources = window.voxelRaymarchResources(child);
+      if (resources) {
+        return resources;
+      }
+    }
+    return undefined;
+  };
+});
+
 page.on('pageerror', (error) => errors.push(error.message));
 page.on('console', (message) => {
-  // Zarrita probes absent v2 metadata while discovering the v3 fixture hierarchy.
   if (
     message.location().url.includes('/zarr-layer-fixture/') &&
     message.text().includes('status of 404')
@@ -75,8 +92,8 @@ async function render(options = {}) {
       volume.values.fill(Number.NaN);
     }
 
-    if (options.fixture) {
-      volume = app.createFixture(options.fixture);
+    if (options.axisMarkers) {
+      volume = app.createAxisMarkerVolume();
     }
 
     if (options.reverseX) {
@@ -99,11 +116,11 @@ async function render(options = {}) {
       }
     }
 
-    const previous = app.lastLayer?.state.resources;
+    const previous = window.voxelRaymarchResources(app.lastLayer);
     const transferFunction = options.gradient
       ? new Uint8Array([255, 0, 0, 16, 0, 0, 255, 16])
-      : options.axisLut
-        ? app.createLut('axes')
+      : options.axisMarkers
+        ? app.createAxisMarkerPalette()
         : options.blue
           ? new Uint8Array([0, 0, 255, 16, 0, 0, 255, 16])
           : new Uint8Array([255, 0, 0, 16, 255, 0, 0, 16]);
@@ -198,7 +215,7 @@ try {
 
   const topDown = {
     map: true,
-    // Include the stretched grid below ground instead of clipping it at the map far plane.
+    /** Keeps stretched cells below ground within the map far plane. */
     farZMultiplier: 4,
     viewState: { longitude: -122.4, latitude: 37.78, zoom: 18, pitch: 0, bearing: 0 },
   };
@@ -395,8 +412,7 @@ try {
   );
 
   const axes = await render({
-    fixture: 'axes',
-    axisLut: true,
+    axisMarkers: true,
     viewState: { target: [0, 0, 0], rotationX: 30, rotationOrbit: -35, zoom: 2.1 },
   });
   const markers = await page.evaluate(() => {
@@ -412,8 +428,7 @@ try {
   assert.ok(colors[1][1] > 200 && colors[1][0] < 80, `Y is green: ${colors}`);
   assert.ok(colors[2][2] > 200 && colors[2][0] < 80, `Z is blue: ${colors}`);
   const flipped = await render({
-    fixture: 'axes',
-    axisLut: true,
+    axisMarkers: true,
     reverseX: true,
     viewState: { target: [0, 0, 0], rotationX: 30, rotationOrbit: -35, zoom: 2.1 },
   });
@@ -434,7 +449,7 @@ try {
     await page.evaluate(
       () =>
         window.voxelFixture.previousResources.volume ===
-        window.voxelFixture.lastLayer.state.resources.volume,
+        window.voxelRaymarchResources(window.voxelFixture.lastLayer).volume,
     ),
     true,
     'style changes reuse scalar texture',
@@ -488,8 +503,9 @@ try {
   const direct = pixel(await render());
   await page.evaluate(() => {
     const app = window.voxelFixture;
-    const style = app.lastLayer.props;
-    Object.assign(app, { loadedFrames: 0, partialFrames: 0, lastLoadedFrame: -1, sourceLoads: 0 });
+    const style = { ...app.lastLayer.props };
+    delete style.volume;
+    Object.assign(app, { partialFrames: 0, lastLoadedFrame: -1, sourceLoads: 0 });
     const layer = new app.ZarrVoxelLayer({
       ...style,
       id: 'url-volume',
@@ -506,7 +522,6 @@ try {
         app.partialFrames++;
       },
       onVolumeLoad: () => {
-        app.loadedFrames++;
         app.lastLoadedFrame = app.deck.props.layers[0].props.frameIndex ?? 0;
       },
     });
@@ -522,7 +537,7 @@ try {
     'a ready chunk paints while another chunk is still downloading',
   );
   assert.ok(pixel(partial, 230, 200)[0] < 4, 'unloaded chunks remain transparent');
-  assert.equal(await page.evaluate(() => window.voxelFixture.loadedFrames), 0);
+  assert.equal(await page.evaluate(() => window.voxelFixture.lastLoadedFrame), -1);
   releaseDelayedChunk();
   await page.waitForFunction(() => {
     const app = window.voxelFixture;
@@ -572,6 +587,82 @@ try {
   const mapped = pixel(await render({ map: true }));
   assert.ok(mapped[0] > 20, 'meter-offset volume renders at a geographic origin in MapView');
 
+  await render({
+    orthographic: false,
+    viewState: { target: [0, 0, 0], rotationX: 30, rotationOrbit: 0, zoom: 5 },
+  });
+  await page.evaluate(async () => {
+    const app = window.voxelFixture;
+    app.retiredRayResources = window.voxelRaymarchResources(app.lastLayer);
+    app.savedDenseProps = app.lastLayer.props;
+    const mesh = await app.prepareCellMesh(
+      {
+        dimensions: [1, 1, 1],
+        origin: [-1, -1, -1],
+        spacing: [2, 2, 2],
+        values: new Float32Array([0.5]),
+        valueDimensions: [1, 1, 1],
+        valueScale: 1,
+        validity: new Uint8Array([1]),
+        ground: new Float32Array([0]),
+        elevationScales: new Float32Array([1]),
+      },
+      1,
+      [0, 1],
+    );
+    app.lastLayer = new app.VoxelLayer({
+      id: 'test-volume',
+      renderMode: 'cells',
+      mesh,
+      palette: new Uint8Array([20, 90, 220, 255]),
+    });
+    app.frames = 0;
+    app.deck.setProps({ layers: [app.lastLayer] });
+  });
+  await page.waitForFunction(() => window.voxelFixture.frames > 0);
+  await page.evaluate(() => window.voxelFixture.deck.device.handle.queue.onSubmittedWorkDone());
+  const cellPixel = pixel(PNG.sync.read(await page.screenshot()));
+  assert.ok(cellPixel[2] > 170 && cellPixel[0] < 40, 'the public cell mode draws stock cuboids');
+  assert.equal(
+    await page.evaluate(() => {
+      const app = window.voxelFixture;
+      const previous = app.retiredRayResources;
+      app.retiredCellModels = app.deck.layerManager
+        .getLayers()
+        .filter((layer) => !layer.isComposite)
+        .flatMap((layer) => layer.getModels());
+      return (
+        previous.model._destroyed &&
+        previous.volume.destroyed &&
+        !window.voxelRaymarchResources(app.lastLayer) &&
+        app.retiredCellModels.length > 0
+      );
+    }),
+    true,
+    'switching the public layer to cells retires its raymarch resources',
+  );
+  await page.evaluate(() => {
+    const app = window.voxelFixture;
+    app.lastLayer = new app.VoxelLayer({ ...app.savedDenseProps });
+    app.frames = 0;
+    app.deck.setProps({ layers: [app.lastLayer] });
+  });
+  await page.waitForFunction(() => window.voxelFixture.frames > 0);
+  await page.evaluate(() => window.voxelFixture.deck.device.handle.queue.onSubmittedWorkDone());
+  assert.equal(
+    await page.evaluate(() => {
+      const app = window.voxelFixture;
+      const resources = window.voxelRaymarchResources(app.lastLayer);
+      return (
+        app.retiredCellModels.every((model) => model._destroyed) &&
+        resources.volume !== app.retiredRayResources.volume &&
+        !resources.volume.destroyed
+      );
+    }),
+    true,
+    'switching back retires stock models and allocates only the active dense renderer',
+  );
+
   await page.setViewportSize({ width: 480, height: 320 });
   await render({ obstacle: true });
   assert.equal(
@@ -585,7 +676,7 @@ try {
   );
   await page.evaluate(() => {
     const app = window.voxelFixture;
-    app.lastResources = app.lastLayer.state.resources;
+    app.lastResources = window.voxelRaymarchResources(app.lastLayer);
     app.deck.finalize();
   });
   assert.equal(
