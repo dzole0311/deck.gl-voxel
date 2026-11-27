@@ -12,6 +12,9 @@
     },
     {
       "path": "./examples/maplibre"
+    },
+    {
+      "path": "./examples/aem"
     }
   ]
 }

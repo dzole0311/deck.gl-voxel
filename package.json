@@ -21,7 +21,8 @@
     "lint:fix": "biome check --write .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm format:check && pnpm lint && pnpm build"
+    "check": "pnpm format:check && pnpm lint && pnpm build",
+    "dev:aem": "pnpm build && pnpm --filter voxel-aem-example dev"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
