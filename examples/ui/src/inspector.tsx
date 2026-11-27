@@ -325,6 +325,7 @@ export function ChunkInspector({ view, onClose, onReload, slowRequests }: ChunkI
                 <p id="debug-details" className="text-xs text-muted-foreground">
                   {selectedChunk.status}
                   {selectedChunk.selected ? `, priority ${selectedChunk.priority.toFixed(2)}` : ''}
+                  {selectedChunk.details ? `. ${selectedChunk.details}` : ''}
                 </p>
               ) : null}
             </div>

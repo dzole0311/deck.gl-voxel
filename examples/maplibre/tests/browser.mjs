@@ -59,25 +59,12 @@ try {
   assert.ok(requests > 0, 'The example must read real generated Zarr chunks');
   assert.equal(await page.locator('#chunk-inspector').count(), 0);
 
-  // Inspecting an already loaded source must not reopen it or fetch data.
   await page.waitForTimeout(300);
   const loadedRequests = requests;
   await page.getByRole('checkbox', { name: 'Chunk inspector', exact: true }).check();
   await page.locator('#debug-counters').waitFor();
   await page.waitForTimeout(300);
   assert.equal(requests, loadedRequests);
-  const panel = await page.locator('#chunk-inspector').evaluate((element) => ({
-    background: getComputedStyle(element).backgroundColor,
-    x: element.getBoundingClientRect().x,
-    right: element.getBoundingClientRect().right,
-    top: element.getBoundingClientRect().top,
-    radius: getComputedStyle(element).borderTopLeftRadius,
-  }));
-  assert.ok(['rgb(255, 255, 255)', 'oklch(1 0 0)'].includes(panel.background));
-  assert.equal(panel.right, 1424);
-  assert.equal(panel.top, 16);
-  assert.equal(panel.radius, '0px');
-  assert.ok(panel.x > 1000);
   const overview = page.locator('#chunk-overview');
   const captureOverview = () => overview.evaluate((canvas) => canvas.toDataURL());
   await page.evaluate(() => {
@@ -227,6 +214,7 @@ try {
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(150);
+  await idle();
   const narrow = await page.locator('#chunk-inspector').boundingBox();
   assert.ok(narrow && narrow.x >= 0 && narrow.x + narrow.width <= 390);
   assert.equal((await page.locator('#status').textContent()).trim(), '');

@@ -100,6 +100,9 @@ export function drawCameraOverview(
   context.lineWidth = 1;
   polygon(ground, '#f5f5f5', '#d4d4d4');
   for (const chunk of state.chunks) {
+    if (chunk.empty) {
+      continue;
+    }
     if (mode === '2d' && (chunk.min[2] > 0.5 || chunk.max[2] <= 0.5)) {
       continue;
     }

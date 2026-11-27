@@ -79,6 +79,9 @@ export function drawChunkOutlines(
   context.clip();
   context.translate(viewport.x, viewport.y);
   for (const chunk of state.chunks) {
+    if (chunk.empty) {
+      continue;
+    }
     const corners: number[][] = [];
     for (const x of [chunk.min[0], chunk.max[0]]) {
       for (const y of [chunk.min[1], chunk.max[1]]) {
