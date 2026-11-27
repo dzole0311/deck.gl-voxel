@@ -1,3 +1,5 @@
+export { type CellGrid, cellValue } from './data/cell-grid.js';
+export { type CellMesh, prepareCellMesh } from './data/cell-mesh.js';
 export type {
   Vector3,
   VoxelData,
