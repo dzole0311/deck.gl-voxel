@@ -11,8 +11,8 @@ import {
   type VoxelData,
   VoxelLayer,
 } from 'deck.gl-voxel';
-import { FrameCache } from './frame-cache.js';
-import { BACKGROUND_PRIORITY } from './request-priority.js';
+import { FrameCache } from './cache/frame-cache.js';
+import { BACKGROUND_PRIORITY } from './cache/request-priority.js';
 import { DEFAULT_MAX_CELLS } from './volume-limits.js';
 import type { ZarrViewOptions } from './volume-view.js';
 import { openZarrVolume, type ZarrVolume, type ZarrVolumeOptions } from './zarr-volume.js';

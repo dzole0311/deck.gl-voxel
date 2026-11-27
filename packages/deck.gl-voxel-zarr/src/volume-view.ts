@@ -1,10 +1,10 @@
 import { Matrix4 } from '@math.gl/core';
 import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import type { Chunk, Array as ZarrArray } from 'zarrita';
-import { ChunkCache } from './chunk-cache.js';
+import { ChunkCache } from './cache/chunk-cache.js';
+import { BACKGROUND_PRIORITY, MAX_VISIBLE_READ_PRIORITY } from './cache/request-priority.js';
 import type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
 import { type ProjectedGrid, projectFrame } from './projected-grid.js';
-import { BACKGROUND_PRIORITY, MAX_VISIBLE_READ_PRIORITY } from './request-priority.js';
 import type { Axis } from './zarr-volume.js';
 
 /**

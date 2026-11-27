@@ -1,4 +1,4 @@
-export { ChunkCache, type ChunkCacheOptions } from './chunk-cache.js';
+export { ChunkCache, type ChunkCacheOptions } from './cache/chunk-cache.js';
 export { type ChunkedVolumeOptions, createChunkedVolume } from './chunked-volume.js';
 export type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
 export { projectGeographicVolume } from './projected-grid.js';
