@@ -1,10 +1,10 @@
 import { Matrix4 } from '@math.gl/core';
 import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
 import type { Chunk, Array as ZarrArray } from 'zarrita';
-import { ChunkCache } from './chunk-cache.js';
-import type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
+import { ChunkCache } from '../cache/chunk-cache.js';
+import { BACKGROUND_PRIORITY, MAX_VISIBLE_READ_PRIORITY } from '../cache/request-priority.js';
+import type { ZarrDebugChunk, ZarrDebugState } from './diagnostics.js';
 import { type ProjectedGrid, projectFrame } from './projected-grid.js';
-import { BACKGROUND_PRIORITY, MAX_VISIBLE_READ_PRIORITY } from './request-priority.js';
 import type { Axis } from './zarr-volume.js';
 
 /**
@@ -119,8 +119,9 @@ export interface VolumeViewSource {
  * Selects chunks for the camera and copies them into a full-sized grid
  * Unloaded cells stay NaN so the renderer can skip them without moving the loaded cells
  * Keeping one volume lets the renderer blend along each ray across chunk boundaries
+ * Cached chunk views are copied so they do not retain larger shared buffers.
  */
-export class VolumeView {
+export class VolumeViewReader {
   private readonly cache: ChunkCache<string, Chunk<'float32'>>;
   private readonly spatialAxes: Vector3;
   private readonly chunkSize: Vector3;
@@ -155,7 +156,6 @@ export class VolumeView {
       load: async (key, signal) => {
         const chunk = await source.array.getChunk(key.split(',').map(Number), { signal });
         signal.throwIfAborted();
-        // Copy a chunk view so it does not keep a larger shared buffer in the cache
         return chunk.data.byteLength === chunk.data.buffer.byteLength
           ? chunk
           : { ...chunk, data: chunk.data.slice() };
@@ -338,6 +338,7 @@ export class VolumeView {
     }
   }
 
+  /** Keeps one neighboring source cell around each chunk for interpolation at its edges. */
   private tiles(
     index: number,
     matrix: readonly number[],
@@ -371,7 +372,6 @@ export class VolumeView {
           if (xr[0] >= xr[1] || yr[0] >= yr[1]) {
             continue;
           }
-          // Include one source cell beyond each chunk so interpolation near its edges stays selected
           const min: Vector3 = [xr[0] - 1 / width, yr[0] - 1 / height, (z - 1) / depth];
           const max: Vector3 = [xr[1] + 1 / width, yr[1] + 1 / height, (end[2] + 1) / depth];
           const selected =

@@ -1,7 +1,7 @@
 import type { Vector3, VoxelGeometry } from 'deck.gl-voxel';
 import { createProjectedGrid } from './projected-grid.js';
 import { DEFAULT_MAX_CELLS } from './volume-limits.js';
-import { VolumeView } from './volume-view.js';
+import { VolumeViewReader } from './volume-view-reader.js';
 import type { ZarrVolume } from './zarr-volume.js';
 
 /** Custom scalar chunks with the same camera selection, cache and map projection as Zarr fields */
@@ -99,7 +99,7 @@ export function createChunkedVolume(options: ChunkedVolumeOptions): ZarrVolume {
   const geometry = grid
     ? { dimensions: grid.dimensions, origin: grid.origin, spacing: grid.spacing }
     : options.geometry;
-  const view = new VolumeView({
+  const view = new VolumeViewReader({
     array: {
       chunks: [1, cz, cy, cx],
       async getChunk(coordinates, request) {

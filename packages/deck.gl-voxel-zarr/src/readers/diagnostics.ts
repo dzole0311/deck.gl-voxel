@@ -10,6 +10,10 @@ export interface ZarrDebugChunk {
   readonly priority: number;
   /** Ready means data is assembled in the view; it can remain ready after decoded-cache eviction. Cached means reused for this query. */
   readonly status: 'outside' | 'queued' | 'loading' | 'ready' | 'cached' | 'cancelled' | 'error';
+  /** Optional source resolution and displayed contribution details for multiscale readers. */
+  readonly details?: string;
+  /** A completed read with no displayed native cells; there is no outline to draw. */
+  readonly empty?: boolean;
 }
 
 /** Read-only loading diagnostics. Cache bytes exclude displayed grids, GPU resources and in-flight decoding. */

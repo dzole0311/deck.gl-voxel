@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createProjectedGrid, projectFrame } from '../dist/projected-grid.js';
+import { createProjectedGrid, projectFrame } from '../dist/readers/projected-grid.js';
 
 test('preserves X-fastest cells and depth order when reversing north-first rows', () => {
   const level = { path: '0', affine: [1, 0, -1, 0, -1, 1], arrayWidth: 2, arrayHeight: 2 };

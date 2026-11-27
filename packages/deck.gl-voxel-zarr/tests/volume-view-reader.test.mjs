@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { openZarrVolume } from '../dist/index.js';
-import { VolumeView, volumeBoxVisible } from '../dist/volume-view.js';
+import { VolumeViewReader, volumeBoxVisible } from '../dist/readers/volume-view-reader.js';
 
 const fullView = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
 const leftView = [8, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
@@ -11,7 +11,7 @@ const rightView = [...leftView.slice(0, 12), -7, -1, -1, 1];
 test('chunks sharing a larger backing buffer stay within the decoded cache budget', async () => {
   const backing = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
   let reads = 0;
-  const view = new VolumeView({
+  const view = new VolumeViewReader({
     array: {
       chunks: [1, 1, 1, 2],
       async getChunk([, , , x]) {

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
+import { BACKGROUND_PRIORITY } from '../dist/cache/request-priority.js';
 import { createChunkedVolume, DEFAULT_MAX_CELLS, projectGeographicVolume } from '../dist/index.js';
-import { BACKGROUND_PRIORITY } from '../dist/request-priority.js';
 
 const fullView = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, -1, -1, -1, 1];
 

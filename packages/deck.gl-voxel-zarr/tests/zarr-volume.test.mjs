@@ -243,3 +243,81 @@ test('GeoZarr derives permuted spatial axes and selects an extra named dimension
   assert.deepEqual(frame.dimensions, [2, 2, 2]);
   assert.deepEqual([...frame.values].map(Math.round), [1, 5, 0, 4, 3, 7, 2, 6]);
 });
+
+test('an opened synchronous store reads dense frames without HTTP or range capability', async (context) => {
+  context.mock.method(globalThis, 'fetch', () => {
+    throw new Error('Unexpected HTTP request');
+  });
+  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
+  const store = new Map([
+    ['/zarr.json', encode({ zarr_format: 3, node_type: 'group', attributes: {} })],
+    ['/grid/zarr.json', encode(v3Array([1, 1, 2], [1, 1, 2]))],
+    ['/grid/c/0/0/0', new Uint8Array(new Float32Array([0, 7]).buffer)],
+  ]);
+  const reader = await openZarrVolume(store, {
+    field: 'grid',
+    layout: { axes: ['z', 'y', 'x'], origin: [10, 20, 30], spacing: [2, -3, 5] },
+  });
+  try {
+    const frame = await reader.readFrame(0);
+    assert.deepEqual(frame.dimensions, [2, 1, 1]);
+    assert.deepEqual(frame.origin, [10, 20, 30]);
+    assert.deepEqual([...frame.values], [0, 7]);
+  } finally {
+    reader.dispose();
+  }
+  assert.ok(store.has('/grid/c/0/0/0'));
+});
+
+test('direct nonconsolidated metadata adapts start-index shards on an opened store', async (context) => {
+  context.mock.method(globalThis, 'fetch', () => {
+    throw new Error('Unexpected HTTP request');
+  });
+  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
+  const array = v3Array([1, 1, 2], [1, 1, 2]);
+  const bytes = { name: 'bytes', configuration: { endian: 'little' } };
+  array.codecs = [
+    {
+      name: 'sharding_indexed',
+      configuration: {
+        chunk_shape: [1, 1, 2],
+        codecs: [bytes],
+        index_codecs: [bytes],
+        index_location: 'start',
+      },
+    },
+  ];
+  const shard = new Uint8Array(24);
+  const index = new DataView(shard.buffer);
+  index.setBigUint64(0, 16n, true);
+  index.setBigUint64(8, 8n, true);
+  shard.set(new Uint8Array(new Float32Array([3, 9]).buffer), 16);
+  const metadata = new Map([
+    ['/zarr.json', encode({ zarr_format: 3, node_type: 'group', attributes: {} })],
+    ['/grid/zarr.json', encode(array)],
+  ]);
+  const ranges = [];
+  const store = {
+    get: async (path) => metadata.get(path),
+    getRange: async (path, range, options) => {
+      assert.equal(path, '/grid/c/0/0/0');
+      options?.signal?.throwIfAborted();
+      ranges.push(range);
+      assert.ok('offset' in range, 'start-index reads must use absolute byte offsets');
+      return shard.slice(range.offset, range.offset + range.length);
+    },
+  };
+  const reader = await openZarrVolume(store, {
+    field: 'grid',
+    layout: { axes: ['z', 'y', 'x'], origin: [0, 0, 0], spacing: [1, 1, 1] },
+  });
+  try {
+    assert.deepEqual([...(await reader.readFrame(0)).values], [3, 9]);
+  } finally {
+    reader.dispose();
+  }
+  assert.deepEqual(ranges, [
+    { offset: 0, length: 16 },
+    { offset: 16, length: 8 },
+  ]);
+});
