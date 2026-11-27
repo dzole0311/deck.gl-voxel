@@ -1,5 +1,5 @@
 import type { VoxelData } from 'deck.gl-voxel';
-import type { ZarrVolume } from '../zarr-volume.js';
+import type { ZarrVolume } from '../readers/zarr-volume.js';
 import { ChunkCache } from './chunk-cache.js';
 
 /** Caches whole frames when camera reads are unavailable */

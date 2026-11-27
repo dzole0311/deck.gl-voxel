@@ -1,18 +1,16 @@
 export { ChunkCache, type ChunkCacheOptions } from './cache/chunk-cache.js';
-export { type ChunkedVolumeOptions, createChunkedVolume } from './chunked-volume.js';
-export type { ZarrDebugChunk, ZarrDebugState } from './debug.js';
-export { projectGeographicVolume } from './projected-grid.js';
-export { DEFAULT_MAX_CELLS } from './volume-limits.js';
-export type { ZarrViewOptions } from './volume-view.js';
+export { type ChunkedVolumeOptions, createChunkedVolume } from './readers/chunked-volume.js';
+export type { ZarrDebugChunk, ZarrDebugState } from './readers/diagnostics.js';
+export { projectGeographicVolume } from './readers/projected-grid.js';
+export { DEFAULT_MAX_CELLS } from './readers/volume-limits.js';
+export type { ZarrViewOptions } from './readers/volume-view-reader.js';
 export {
-  type GeoZarrVolume,
-  type GeoZarrVolumeOptions,
-  openGeoZarrVolume,
   openZarrVolume,
   type ZarrVolume,
   type ZarrVolumeLayout,
   type ZarrVolumeOptions,
-} from './zarr-volume.js';
+} from './readers/zarr-volume.js';
+export type { ZarrStoreInput } from './storage/zarr-store.js';
 export {
   type ZarrFetch,
   type ZarrFetchContext,

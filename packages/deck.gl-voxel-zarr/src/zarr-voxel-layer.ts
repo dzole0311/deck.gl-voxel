@@ -13,9 +13,9 @@ import {
 } from 'deck.gl-voxel';
 import { FrameCache } from './cache/frame-cache.js';
 import { BACKGROUND_PRIORITY } from './cache/request-priority.js';
-import { DEFAULT_MAX_CELLS } from './volume-limits.js';
-import type { ZarrViewOptions } from './volume-view.js';
-import { openZarrVolume, type ZarrVolume, type ZarrVolumeOptions } from './zarr-volume.js';
+import { DEFAULT_MAX_CELLS } from './readers/volume-limits.js';
+import type { ZarrViewOptions } from './readers/volume-view-reader.js';
+import { openZarrVolume, type ZarrVolume, type ZarrVolumeOptions } from './readers/zarr-volume.js';
 
 /** Options for {@link openZarrVolume}; the layer owns cancellation of metadata and frame reads. */
 export type ZarrLayerSourceOptions = Omit<

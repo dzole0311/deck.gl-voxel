@@ -1,11 +1,11 @@
 import type { Vector3, VoxelData, VoxelGeometry } from 'deck.gl-voxel';
-import { type Chunk, FetchStore, get, open, root, withRangeCoalescing } from 'zarrita';
-
-import type { ZarrDebugState } from './debug.js';
-import { hasGeoZarrMetadata, readGeoZarrField, readSpatialAttributes } from './geo-zarr-volume.js';
+import { type Chunk, get, open, root, withRangeCoalescing } from 'zarrita';
+import { createZarrStore, type ZarrStoreInput } from '../storage/zarr-store.js';
+import type { ZarrDebugState } from './diagnostics.js';
+import { hasGeoZarrMetadata, readGeoZarrField, readSpatialAttributes } from './geozarr-field.js';
 import { createProjectedGrid, projectFrame } from './projected-grid.js';
 import { DEFAULT_MAX_CELLS } from './volume-limits.js';
-import { VolumeView, type ZarrViewOptions } from './volume-view.js';
+import { VolumeViewReader, type ZarrViewOptions } from './volume-view-reader.js';
 
 /** Labels for the stored array's dimensions. */
 export type Axis = 'x' | 'y' | 'z' | 'time' | null;
@@ -141,14 +141,17 @@ export interface ZarrVolume {
  * Opens a float32 volume from a Zarr v2 or v3 store and reads its metadata and coordinates
  * Use readView to load chunks for the camera or readFrame to load the whole grid
  * GeoZarr supplies map placement, while plain Zarr requires layout
- * @param url - HTTP(S) store root with CORS enabled for cross-origin reads
+ * @param input - URL or opened readable store. Configure its transport before passing it.
  * @param options - Field, grid geometry and frame size limit
  * @returns A reader that fetches the chunks needed for each requested frame or view
  * @throws {Error} If the field, geometry or selected frame size is unsupported
  * @see https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html
  * @see https://geozarr.org/conventions.html
  */
-export async function openZarrVolume(url: string, options: ZarrVolumeOptions): Promise<ZarrVolume> {
+export async function openZarrVolume(
+  input: ZarrStoreInput,
+  options: ZarrVolumeOptions,
+): Promise<ZarrVolume> {
   const { field, layout, signal } = options;
   const maxCells = options.maxCells ?? DEFAULT_MAX_CELLS;
 
@@ -156,14 +159,8 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
     throw new Error('maxCells must be a positive safe integer.');
   }
 
-  const location = root(
-    withRangeCoalescing(
-      new FetchStore(url, {
-        useSuffixRequest: true,
-        ...(options.fetch && { fetch: options.fetch }),
-      }),
-    ),
-  );
+  const store = createZarrStore(input, { ...(options.fetch ? { fetch: options.fetch } : {}) });
+  const location = root(typeof input === 'string' ? withRangeCoalescing(store) : store);
   const openOptions = signal ? { signal } : {};
   const node = await open(location.resolve(field), openOptions);
   const attributes = await readSpatialAttributes(location, node, openOptions);
@@ -217,7 +214,7 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
   const geometry: VoxelGeometry = grid
     ? { dimensions: grid.dimensions, origin: grid.origin, spacing: grid.spacing }
     : { dimensions, ...(layout && { origin: layout.origin, spacing: layout.spacing }) };
-  const view = new VolumeView({
+  const view = new VolumeViewReader({
     array: scalar,
     axes,
     dimensions,
@@ -277,35 +274,6 @@ export async function openZarrVolume(url: string, options: ZarrVolumeOptions): P
       };
     },
   };
-}
-
-/** Options for the original GeoZarr-only entry point. */
-export interface GeoZarrVolumeOptions extends ZarrVolumeOptions {
-  /** Name of the vertical dimension on the array. */
-  readonly verticalDimension: string;
-
-  /** Store-relative path to the vertical coordinate array. */
-  readonly verticalCoordinates: string;
-
-  /** GeoZarr supplies the grid layout. */
-  readonly layout?: never;
-}
-
-/** Return type of the original GeoZarr-only entry point. */
-export type GeoZarrVolume = ZarrVolume;
-
-/**
- * Opens a GeoZarr field through the shared reader.
- * @param url - HTTP(S) Zarr store root.
- * @param options - Field, overview, and vertical coordinates.
- * @returns A reader that fetches frames on demand.
- * @see {@link openZarrVolume}
- */
-export function openGeoZarrVolume(
-  url: string,
-  options: GeoZarrVolumeOptions,
-): Promise<GeoZarrVolume> {
-  return openZarrVolume(url, options);
 }
 
 /**
