@@ -34,6 +34,7 @@ import type { ZarrDebugChunk, ZarrDebugState } from './diagnostics.js';
 
 const MERCATOR_TO_COMMON = 512 / (2 * Math.PI * 6378137);
 const TILE_SIZE = 128;
+const FIELD_OPEN_CONCURRENCY = 27;
 
 /** Field group path and its relative paths for physical Z, ground elevations and native validity. */
 export interface GeoZarrFieldOptions {
@@ -249,7 +250,8 @@ export class GeoZarrCollection {
 
   /**
    * Opens north-up, pixel-registered Web Mercator fields with uniform positive-up meter Z coordinates.
-   * Coordinate arrays are read in sequence to bound startup I/O.
+   * Opens up to 27 fields concurrently, preserving field-path order.
+   * Failure or cancellation aborts outstanding startup reads.
    */
   static async open(
     input: ZarrStoreInput,
@@ -284,7 +286,7 @@ export class GeoZarrCollection {
     );
     const fields: GeoZarrCollectionField[] = [];
     const selected = 'fields' in options ? options.fields : selectFields(options, nodes);
-    for (const config of Array.from(selected).sort((a, b) => a.path.localeCompare(b.path))) {
+    const readField = async (config: GeoZarrFieldOptions): Promise<GeoZarrCollectionField> => {
       const node = await open.v3(root(store).resolve(config.path), { kind: 'group', signal });
       const metadata = parseGeoZarrMetadata(node.attrs);
       const native = metadata.levels[0];
@@ -314,7 +316,7 @@ export class GeoZarrCollection {
       }
       const coordinates = await open.v3(
         root(store).resolve(`/${config.path}/${config.verticalCoordinates}`),
-        { kind: 'array' },
+        { kind: 'array', signal },
       );
       if (
         !(coordinates.is('float32') || coordinates.is('float64')) ||
@@ -349,7 +351,7 @@ export class GeoZarrCollection {
           'Ground elevation requires an actual_range for conservative view selection.',
         );
       }
-      fields.push({
+      return {
         path: config.path,
         attributes: node.attrs,
         metadata,
@@ -366,7 +368,22 @@ export class GeoZarrCollection {
           second - first,
         ],
         groundRange: [Number(range[0]), Number(range[1])],
-      });
+      };
+    };
+    const sorted = Array.from(selected).sort((a, b) => a.path.localeCompare(b.path));
+    const pending = sorted.entries();
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(FIELD_OPEN_CONCURRENCY, sorted.length) }, async () => {
+          for (const [index, config] of pending) {
+            signal.throwIfAborted();
+            fields[index] = await readField(config);
+          }
+        }),
+      );
+    } catch (error) {
+      controller.abort(error);
+      throw error;
     }
     return new GeoZarrCollection(store, fields, options, controller, transport);
   }

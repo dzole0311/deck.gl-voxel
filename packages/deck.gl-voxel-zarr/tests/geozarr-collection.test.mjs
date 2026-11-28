@@ -21,7 +21,7 @@ test('local screen error selects useful stored levels with hysteresis around tra
   assert.equal(selectOverviewLevel(1.6, 6, 1), 0);
 });
 
-function fixture(groundValues = {}, consolidated = true, prefix = '') {
+function fixture(groundValues = {}, consolidated = true, prefix = '', names = ['alpha', 'beta']) {
   const nodes = {},
     bytes = new Map();
   const array = (path, shape, type, data, attributes = {}) => {
@@ -40,7 +40,7 @@ function fixture(groundValues = {}, consolidated = true, prefix = '') {
     };
     bytes.set(`/${path}/c/${shape.map(() => 0).join('/')}`, new Uint8Array(data.buffer));
   };
-  for (const name of ['alpha', 'beta']) {
+  for (const name of names) {
     const path = prefix ? `${prefix}/${name}` : name;
     const attrs = {
       'proj:code': 'EPSG:3857',
@@ -109,7 +109,7 @@ function fixture(groundValues = {}, consolidated = true, prefix = '') {
     active = 0,
     maxActive = 0;
   return {
-    fields: ['alpha', 'beta'].map((name) => ({
+    fields: names.map((name) => ({
       path: prefix ? `${prefix}/${name}` : name,
       verticalCoordinates: 'z',
       groundElevation: 'ground',
@@ -146,6 +146,109 @@ async function settled(source) {
     await new Promise((r) => setTimeout(r, 10));
   }
   throw new Error(`Not settled: ${JSON.stringify(source.getStats())}`);
+}
+
+test(
+  'field opening limits concurrency and preserves sorted order after out-of-order reads',
+  { timeout: 2000 },
+  async () => {
+    const names = Array.from(
+      { length: 32 },
+      (_, index) => `field-${String(31 - index).padStart(2, '0')}`,
+    );
+    const f = fixture({}, true, '', names);
+    const pending = new Map();
+    let active = 0;
+    let peak = 0;
+    const opening = GeoZarrCollection.open(
+      {
+        async get(path, options) {
+          if (path.endsWith('/z/c/0')) {
+            active++;
+            peak = Math.max(peak, active);
+            await new Promise((resolve) => pending.set(path, resolve));
+            active--;
+          }
+          return f.store.get(path, options);
+        },
+      },
+      { fields: f.fields, bins: 10, valueRange: [0, 1] },
+    );
+    await waitFor(() => pending.size === 27);
+    assert.equal(active, 27);
+    for (const release of [...pending.values()].reverse()) {
+      release();
+    }
+    await waitFor(() => pending.size === names.length);
+    for (const release of pending.values()) {
+      release();
+    }
+    const source = await opening;
+    try {
+      assert.equal(peak, 27);
+      assert.deepEqual(
+        source.fields.map((field) => field.path),
+        [...names].sort(),
+      );
+      assert.ok(source.fields.every((field) => field.dimensions[2] === 2));
+    } finally {
+      source.dispose();
+    }
+  },
+);
+
+test(
+  'failed or cancelled field opening aborts outstanding reads without starting queued fields',
+  { timeout: 2000 },
+  async (context) => {
+    for (const mode of ['failure', 'cancellation']) {
+      await context.test(mode, async () => {
+        const names = Array.from({ length: 32 }, (_, index) => `field-${index}`);
+        const f = fixture({}, true, '', names);
+        const controller = new AbortController();
+        const signals = [];
+        let fail;
+        const reason = new Error(mode);
+        const opening = GeoZarrCollection.open(
+          {
+            async get(path, options) {
+              if (path.endsWith('/z/c/0')) {
+                signals.push(options.signal);
+                await new Promise((_, reject) => {
+                  fail ??= () => reject(reason);
+                  options.signal.addEventListener('abort', () => reject(options.signal.reason), {
+                    once: true,
+                  });
+                });
+              }
+              return f.store.get(path, options);
+            },
+          },
+          { fields: f.fields, bins: 10, valueRange: [0, 1], signal: controller.signal },
+        );
+        const rejected = assert.rejects(opening, (error) => error === reason);
+        await waitFor(() => signals.length === 27);
+        if (mode === 'failure') {
+          fail();
+        } else {
+          controller.abort(reason);
+        }
+        await rejected;
+        assert.equal(signals.length, 27);
+        assert.ok(signals.every((signal) => signal.aborted));
+      });
+    }
+  },
+);
+
+async function waitFor(predicate) {
+  const deadline = performance.now() + 1000;
+  while (!predicate()) {
+    if (performance.now() >= deadline) {
+      throw new Error('Timed out waiting for field reads.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 test('catalog discovery uses custom fetch and reads metadata without coordinate or payload chunks', async () => {
